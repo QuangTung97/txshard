@@ -27,9 +27,6 @@ const (
 // PartitionID ...
 type PartitionID uint32
 
-// LeaderID ...
-type LeaderID uint32
-
 // NodeID ...
 type NodeID uint32
 
@@ -37,14 +34,19 @@ type NodeID uint32
 type PartitionEvent struct {
 	Type      EtcdEventType
 	Partition PartitionID
-	Leader    LeaderID
-	Revision  Revision
+	Leader    NodeID
+}
+
+// PartitionEvents ...
+type PartitionEvents struct {
+	Events   []PartitionEvent
+	Revision Revision
 }
 
 // NodeEvent ...
 type NodeEvent struct {
 	Type          EtcdEventType
-	Node          NodeID
+	NodeID        NodeID
 	LastPartition PartitionID
 	Revision      Revision
 }

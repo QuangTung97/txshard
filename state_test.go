@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/stretchr/testify/assert"
 	"testing"
+	"time"
 )
 
 func TestState_RunLoop_NodeEvent(t *testing.T) {
@@ -14,13 +15,12 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 		stateAfter  func(s *state)
 
 		output runLoopOutput
-		err    error
 	}{
 		{
 			name: "add-node",
 			event: NodeEvent{
 				Type:          EtcdEventTypePut,
-				Node:          1,
+				NodeID:        1,
 				LastPartition: 3,
 				Revision:      100,
 			},
@@ -58,7 +58,7 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 			name: "add-node-not-leader",
 			event: NodeEvent{
 				Type:          EtcdEventTypePut,
-				Node:          1,
+				NodeID:        1,
 				LastPartition: 3,
 				Revision:      100,
 			},
@@ -82,7 +82,7 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 			event: NodeEvent{
 				Type:          EtcdEventTypePut,
 				LastPartition: 1,
-				Node:          2,
+				NodeID:        2,
 				Revision:      200,
 			},
 			stateBefore: func(s *state) {
@@ -134,7 +134,7 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 			event: NodeEvent{
 				Type:          EtcdEventTypePut,
 				LastPartition: 1,
-				Node:          2,
+				NodeID:        2,
 				Revision:      200,
 			},
 			stateBefore: func(s *state) {
@@ -148,14 +148,14 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 				s.partitions = []Partition{
 					{
 						Persisted:   true,
-						NodeID:      1,
+						Leader:      1,
 						ModRevision: 120,
 					},
 					{},
 					{},
 					{
 						Persisted:   true,
-						NodeID:      1,
+						Leader:      1,
 						ModRevision: 120,
 					},
 				}
@@ -196,7 +196,7 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 			name: "delete-node",
 			event: NodeEvent{
 				Type:          EtcdEventTypeDelete,
-				Node:          1,
+				NodeID:        1,
 				LastPartition: 3,
 				Revision:      300,
 			},
@@ -216,18 +216,18 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 				s.partitions = []Partition{
 					{
 						Persisted:   true,
-						NodeID:      1,
+						Leader:      1,
 						ModRevision: 120,
 					},
 					{
 						Persisted:   true,
-						NodeID:      2,
+						Leader:      2,
 						ModRevision: 220,
 					},
 					{},
 					{
 						Persisted:   true,
-						NodeID:      1,
+						Leader:      1,
 						ModRevision: 120,
 					},
 				}
@@ -277,11 +277,260 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 			*stateAfter = *s
 			e.stateAfter(stateAfter)
 
-			output, err := s.runLoop(context.Background(), ch, nil, nil)
+			output := s.runLoop(context.Background(), ch, nil, nil)
 
-			assert.Equal(t, e.err, err)
 			assert.Equal(t, stateAfter, s)
 			assert.Equal(t, e.output, output)
 		})
 	}
+}
+
+func TestRunLoop_PartitionEvent(t *testing.T) {
+	table := []struct {
+		name        string
+		event       PartitionEvents
+		stateBefore func(s *state)
+		stateAfter  func(s *state)
+
+		output runLoopOutput
+	}{
+		{
+			name: "add-two-partition",
+			event: PartitionEvents{
+				Events: []PartitionEvent{
+					{
+						Type:      EtcdEventTypePut,
+						Partition: 0,
+						Leader:    1,
+					},
+					{
+						Type:      EtcdEventTypePut,
+						Partition: 2,
+						Leader:    2,
+					},
+				},
+				Revision: 200,
+			},
+			stateBefore: func(s *state) {
+				s.nodes = []Node{
+					{
+						ID:            2,
+						LastPartition: 1,
+						ModRevision:   30,
+					},
+					{
+						ID:            1,
+						LastPartition: 3,
+						ModRevision:   20,
+					},
+				}
+			},
+			stateAfter: func(s *state) {
+				s.partitions = []Partition{
+					{
+						Persisted:   true,
+						IsRunning:   true,
+						Leader:      1,
+						ModRevision: 200,
+					},
+					{},
+					{
+						Persisted:   true,
+						IsRunning:   false,
+						Leader:      2,
+						ModRevision: 200,
+					},
+					{},
+				}
+			},
+			output: runLoopOutput{
+				startPartitions: []PartitionID{0},
+			},
+		},
+		{
+			name: "add-two-remove-one-partition",
+			event: PartitionEvents{
+				Events: []PartitionEvent{
+					{
+						Type:      EtcdEventTypeDelete,
+						Partition: 0,
+					},
+					{
+						Type:      EtcdEventTypePut,
+						Partition: 2,
+						Leader:    2,
+					},
+					{
+						Type:      EtcdEventTypePut,
+						Partition: 1,
+						Leader:    1,
+					},
+				},
+				Revision: 200,
+			},
+			stateBefore: func(s *state) {
+				s.nodes = []Node{
+					{
+						ID:            2,
+						LastPartition: 1,
+						ModRevision:   30,
+					},
+					{
+						ID:            1,
+						LastPartition: 3,
+						ModRevision:   20,
+					},
+				}
+				s.partitions = []Partition{
+					{
+						Persisted:   true,
+						IsRunning:   true,
+						Leader:      1,
+						ModRevision: 80,
+					},
+					{},
+					{},
+					{},
+				}
+			},
+			stateAfter: func(s *state) {
+				s.partitions = []Partition{
+					{},
+					{
+						Persisted:   true,
+						IsRunning:   true,
+						Leader:      1,
+						ModRevision: 200,
+					},
+					{
+						Persisted:   true,
+						IsRunning:   false,
+						Leader:      2,
+						ModRevision: 200,
+					},
+					{},
+				}
+			},
+			output: runLoopOutput{
+				startPartitions: []PartitionID{1},
+				stopPartitions:  []PartitionID{0},
+			},
+		},
+	}
+
+	for _, e := range table {
+		t.Run(e.name, func(t *testing.T) {
+			ch := make(chan PartitionEvents, 1)
+			ch <- e.event
+
+			s := newState(4, "/partition/", 1)
+
+			if e.stateBefore != nil {
+				e.stateBefore(s)
+			}
+
+			stateAfter := &state{}
+			*stateAfter = *s
+			e.stateAfter(stateAfter)
+
+			output := s.runLoop(context.Background(), nil, ch, nil)
+
+			assert.Equal(t, stateAfter, s)
+			assert.Equal(t, e.output, output)
+		})
+	}
+}
+
+func TestRunLoop_Retry_After(t *testing.T) {
+	table := []struct {
+		name        string
+		stateBefore func(s *state)
+		stateAfter  func(s *state)
+
+		output runLoopOutput
+	}{
+		{
+			name: "not-leader",
+		},
+		{
+			name: "leader-without-nodes",
+			stateBefore: func(s *state) {
+				s.leaderNodeID = 1
+			},
+		},
+		{
+			name: "leader-with-nodes",
+			stateBefore: func(s *state) {
+				s.leaderNodeID = 1
+				s.nodes = []Node{
+					{
+						ID:            2,
+						LastPartition: 1,
+						ModRevision:   200,
+					},
+					{
+						ID:            1,
+						LastPartition: 3,
+						ModRevision:   100,
+					},
+				}
+			},
+			output: runLoopOutput{
+				kvs: []CASKeyValue{
+					{
+						Key:   "/partition/0",
+						Value: "2",
+					},
+					{
+						Key:   "/partition/1",
+						Value: "2",
+					},
+					{
+						Key:   "/partition/2",
+						Value: "1",
+					},
+					{
+						Key:   "/partition/3",
+						Value: "1",
+					},
+				},
+			},
+		},
+	}
+
+	for _, e := range table {
+		t.Run(e.name, func(t *testing.T) {
+			ch := make(chan time.Time, 1)
+			ch <- time.Now()
+
+			s := newState(4, "/partition/", 1)
+
+			if e.stateBefore != nil {
+				e.stateBefore(s)
+			}
+
+			stateAfter := &state{}
+			*stateAfter = *s
+
+			if e.stateAfter != nil {
+				e.stateAfter(stateAfter)
+			}
+
+			output := s.runLoop(context.Background(), nil, nil, ch)
+
+			assert.Equal(t, stateAfter, s)
+			assert.Equal(t, e.output, output)
+		})
+	}
+}
+
+func TestRunLoop_Context_Cancel(t *testing.T) {
+	s := newState(4, "/partition/", 1)
+
+	ctx := context.Background()
+	ctx, cancel := context.WithCancel(ctx)
+	cancel()
+
+	output := s.runLoop(ctx, nil, nil, nil)
+	assert.Equal(t, runLoopOutput{}, output)
 }

@@ -18,7 +18,7 @@ type Node struct {
 type Partition struct {
 	Persisted   bool
 	IsRunning   bool
-	NodeID      NodeID
+	Leader      NodeID
 	ModRevision Revision
 }
 
@@ -44,7 +44,6 @@ func newState(partitionCount PartitionID, partitionPrefix string, selfNodeID Nod
 }
 
 type runLoopOutput struct {
-	after           time.Duration
 	kvs             []CASKeyValue
 	startPartitions []PartitionID
 	stopPartitions  []PartitionID
@@ -80,7 +79,7 @@ func (s *state) computePartitionKvs() []CASKeyValue {
 		nodeID := computeNodeIDFromPartitionID(s.nodes, partitionID)
 		partition := s.partitions[partitionID]
 
-		if partition.Persisted && partition.NodeID == nodeID {
+		if partition.Persisted && partition.Leader == nodeID {
 			continue
 		}
 
@@ -112,18 +111,18 @@ func deleteNodesByID(nodes []Node, nodeID NodeID) []Node {
 func (s *state) runLoopHandleNodeEvent(nodeEvent NodeEvent) runLoopOutput {
 	if nodeEvent.Type == EtcdEventTypePut {
 		s.nodes = append(s.nodes, Node{
-			ID:            nodeEvent.Node,
+			ID:            nodeEvent.NodeID,
 			LastPartition: nodeEvent.LastPartition,
 			ModRevision:   nodeEvent.Revision,
 		})
 	} else if nodeEvent.Type == EtcdEventTypeDelete {
-		s.nodes = deleteNodesByID(s.nodes, nodeEvent.Node)
+		s.nodes = deleteNodesByID(s.nodes, nodeEvent.NodeID)
 	}
 
 	sort.Sort(sortNode(s.nodes))
 
 	var kvs []CASKeyValue
-	if s.leaderNodeID == s.selfNodeID {
+	if len(s.nodes) > 0 && s.leaderNodeID == s.selfNodeID {
 		kvs = s.computePartitionKvs()
 	}
 
@@ -132,13 +131,62 @@ func (s *state) runLoopHandleNodeEvent(nodeEvent NodeEvent) runLoopOutput {
 	}
 }
 
+func (s *state) runLoopHandlePartitionEvent(events PartitionEvents) runLoopOutput {
+	var startPartitions []PartitionID
+	var stopPartitions []PartitionID
+
+	for _, e := range events.Events {
+		if e.Type == EtcdEventTypePut {
+			s.partitions[e.Partition].Persisted = true
+			s.partitions[e.Partition].Leader = e.Leader
+			s.partitions[e.Partition].ModRevision = events.Revision
+		} else {
+			s.partitions[e.Partition].Persisted = false
+			s.partitions[e.Partition].Leader = 0
+			s.partitions[e.Partition].ModRevision = 0
+		}
+
+		oldIsRunning := s.partitions[e.Partition].IsRunning
+		newIsRunning := e.Type == EtcdEventTypePut && e.Leader == s.selfNodeID
+
+		if newIsRunning != oldIsRunning {
+			if newIsRunning {
+				startPartitions = append(startPartitions, e.Partition)
+			} else {
+				stopPartitions = append(stopPartitions, e.Partition)
+			}
+		}
+		s.partitions[e.Partition].IsRunning = newIsRunning
+	}
+
+	return runLoopOutput{
+		startPartitions: startPartitions,
+		stopPartitions:  stopPartitions,
+	}
+}
+
 func (s *state) runLoop(ctx context.Context,
 	nodeEvents <-chan NodeEvent,
-	partitionEvents <-chan PartitionEvent,
+	partitionEventsChan <-chan PartitionEvents,
 	after <-chan time.Time,
-) (runLoopOutput, error) {
+) runLoopOutput {
 	select {
 	case nodeEvent := <-nodeEvents:
-		return s.runLoopHandleNodeEvent(nodeEvent), nil
+		return s.runLoopHandleNodeEvent(nodeEvent)
+
+	case partitionEvent := <-partitionEventsChan:
+		return s.runLoopHandlePartitionEvent(partitionEvent)
+
+	case <-after:
+		var kvs []CASKeyValue
+		if len(s.nodes) > 0 && s.leaderNodeID == s.selfNodeID {
+			kvs = s.computePartitionKvs()
+		}
+		return runLoopOutput{
+			kvs: kvs,
+		}
+
+	case <-ctx.Done():
+		return runLoopOutput{}
 	}
 }
