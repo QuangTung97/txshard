@@ -51,6 +51,11 @@ type NodeEvent struct {
 	Revision      Revision
 }
 
+type LeaderEvent struct {
+	Type   EtcdEventType
+	Leader NodeID
+}
+
 // EtcdClient ...
 type EtcdClient interface {
 	CompareAndSet(ctx context.Context, kvs []CASKeyValue) error

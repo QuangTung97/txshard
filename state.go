@@ -175,6 +175,7 @@ func (s *state) runLoop(
 	ctx context.Context,
 	nodeEvents <-chan NodeEvent,
 	partitionEventsChan <-chan PartitionEvents,
+	leaderEvents <-chan LeaderEvent,
 	after <-chan time.Time,
 ) runLoopOutput {
 	select {
@@ -183,6 +184,14 @@ func (s *state) runLoop(
 
 	case partitionEvent := <-partitionEventsChan:
 		return s.runLoopHandlePartitionEvent(partitionEvent)
+
+	case leaderEvent := <-leaderEvents:
+		if leaderEvent.Type == EtcdEventTypePut {
+			s.leaderNodeID = leaderEvent.Leader
+		} else {
+			s.leaderNodeID = 0
+		}
+		return runLoopOutput{}
 
 	case <-after:
 		var kvs []CASKeyValue

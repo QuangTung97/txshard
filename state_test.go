@@ -277,7 +277,7 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 			*stateAfter = *s
 			e.stateAfter(stateAfter)
 
-			output := s.runLoop(context.Background(), ch, nil, nil)
+			output := s.runLoop(context.Background(), ch, nil, nil, nil)
 
 			assert.Equal(t, stateAfter, s)
 			assert.Equal(t, e.output, output)
@@ -428,7 +428,7 @@ func TestRunLoop_PartitionEvent(t *testing.T) {
 			*stateAfter = *s
 			e.stateAfter(stateAfter)
 
-			output := s.runLoop(context.Background(), nil, ch, nil)
+			output := s.runLoop(context.Background(), nil, ch, nil, nil)
 
 			assert.Equal(t, stateAfter, s)
 			assert.Equal(t, e.output, output)
@@ -446,6 +446,21 @@ func TestRunLoop_Retry_After(t *testing.T) {
 	}{
 		{
 			name: "not-leader",
+			stateBefore: func(s *state) {
+				s.leaderNodeID = 2
+				s.nodes = []Node{
+					{
+						ID:            2,
+						LastPartition: 1,
+						ModRevision:   200,
+					},
+					{
+						ID:            1,
+						LastPartition: 3,
+						ModRevision:   100,
+					},
+				}
+			},
 		},
 		{
 			name: "leader-without-nodes",
@@ -511,7 +526,7 @@ func TestRunLoop_Retry_After(t *testing.T) {
 				e.stateAfter(stateAfter)
 			}
 
-			output := s.runLoop(context.Background(), nil, nil, ch)
+			output := s.runLoop(context.Background(), nil, nil, nil, ch)
 
 			assert.Equal(t, stateAfter, s)
 			assert.Equal(t, e.output, output)
@@ -526,6 +541,67 @@ func TestRunLoop_Context_Cancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(ctx)
 	cancel()
 
-	output := s.runLoop(ctx, nil, nil, nil)
+	output := s.runLoop(ctx, nil, nil, nil, nil)
 	assert.Equal(t, runLoopOutput{}, output)
+}
+
+func TestRunLoop_LeaderEvent(t *testing.T) {
+	table := []struct {
+		name        string
+		event       LeaderEvent
+		stateBefore func(s *state)
+		stateAfter  func(s *state)
+
+		output runLoopOutput
+	}{
+		{
+			name: "put-leader",
+			event: LeaderEvent{
+				Type:   EtcdEventTypePut,
+				Leader: 2,
+			},
+			stateBefore: func(s *state) {
+				s.selfNodeID = 1
+				s.leaderNodeID = 0
+			},
+			stateAfter: func(s *state) {
+				s.leaderNodeID = 2
+			},
+		},
+		{
+			name: "delete-leader",
+			event: LeaderEvent{
+				Type:   EtcdEventTypeDelete,
+			},
+			stateBefore: func(s *state) {
+				s.selfNodeID = 1
+				s.leaderNodeID = 2
+			},
+			stateAfter: func(s *state) {
+				s.leaderNodeID = 0
+			},
+		},
+	}
+
+	for _, e := range table {
+		t.Run(e.name, func(t *testing.T) {
+			ch := make(chan LeaderEvent, 1)
+			ch <- e.event
+
+			s := newState(4, "/partition/", 1)
+
+			if e.stateBefore != nil {
+				e.stateBefore(s)
+			}
+
+			stateAfter := &state{}
+			*stateAfter = *s
+			e.stateAfter(stateAfter)
+
+			output := s.runLoop(context.Background(), nil, nil, ch, nil)
+
+			assert.Equal(t, stateAfter, s)
+			assert.Equal(t, e.output, output)
+		})
+	}
 }
