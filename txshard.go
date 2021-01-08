@@ -75,6 +75,7 @@ type Runner func(ctx context.Context, partitionID PartitionID)
 
 type activeRunner struct {
 	cancel context.CancelFunc
+	done   <-chan struct{}
 }
 
 // Processor ...
@@ -150,7 +151,9 @@ func (p *Processor) Run(ctx context.Context) {
 		if len(output.kvs) > 0 {
 			err := p.client.CompareAndSet(ctx, output.kvs)
 			if err != nil {
-				p.logger.Error("client.CompareAndSet", zap.Any("kvs", output.kvs))
+				p.logger.Error("client.CompareAndSet", zap.Error(err),
+					zap.Any("kvs", output.kvs),
+				)
 				after = time.After(p.timeoutDuration)
 				continue
 			}
@@ -160,18 +163,24 @@ func (p *Processor) Run(ctx context.Context) {
 			p.wg.Add(1)
 			ctx, cancel := context.WithCancel(ctx)
 
+			done := make(chan struct{}, 1)
+
 			go func() {
 				defer p.wg.Done()
 				p.runner(ctx, partition)
+				done <- struct{}{}
 			}()
 
 			p.activeMap[partition] = activeRunner{
 				cancel: cancel,
+				done:   done,
 			}
 		}
 
 		for _, partition := range output.stopPartitions {
 			p.activeMap[partition].cancel()
+			<-p.activeMap[partition].done
+
 			delete(p.activeMap, partition)
 		}
 	}
