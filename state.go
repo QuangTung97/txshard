@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -32,8 +33,11 @@ type state struct {
 	leaseID      LeaseID
 	leaderNodeID NodeID
 
-	nodes      []Node
-	partitions []Partition
+	nodeMapMut sync.RWMutex
+	nodeMap    map[NodeID]Node
+
+	partitionsMut sync.RWMutex
+	partitions    []Partition
 }
 
 func newState(
@@ -50,6 +54,36 @@ func newState(
 
 		partitions: make([]Partition, partitionCount),
 	}
+}
+
+func (s *state) clone() *state {
+	return &state{
+		partitionPrefix: s.partitionPrefix,
+		partitionCount:  s.partitionCount,
+		nodePrefix:      s.nodePrefix,
+
+		selfNodeID:        s.selfNodeID,
+		selfLastPartition: s.selfLastPartition,
+
+		leaseID:      s.leaseID,
+		leaderNodeID: s.leaderNodeID,
+
+		nodeMap:    s.nodeMap,
+		partitions: s.partitions,
+	}
+}
+
+func (s *state) getNodeForPartition(partition PartitionID) Node {
+	s.nodeMapMut.RLock()
+	s.partitionsMut.RLock()
+
+	nodeID := s.partitions[partition].Owner
+	m := s.nodeMap
+
+	s.partitionsMut.RUnlock()
+	s.nodeMapMut.RUnlock()
+
+	return m[nodeID]
 }
 
 type runLoopOutput struct {
@@ -83,9 +117,20 @@ func computeNodeIDFromPartitionID(nodes []Node, partition PartitionID) NodeID {
 }
 
 func (s *state) computePartitionKvs() []CASKeyValue {
+	s.nodeMapMut.RLock()
+	nodes := make([]Node, 0, len(s.nodeMap))
+	for _, n := range s.nodeMap {
+		nodes = append(nodes, n)
+	}
+	s.nodeMapMut.RUnlock()
+
+	sort.Sort(sortNode(nodes))
+
 	kvs := make([]CASKeyValue, 0)
+
+	s.partitionsMut.RLock()
 	for partitionID := PartitionID(0); partitionID < s.partitionCount; partitionID++ {
-		nodeID := computeNodeIDFromPartitionID(s.nodes, partitionID)
+		nodeID := computeNodeIDFromPartitionID(nodes, partitionID)
 		partition := s.partitions[partitionID]
 
 		if partition.Persisted && partition.Owner == nodeID {
@@ -103,35 +148,57 @@ func (s *state) computePartitionKvs() []CASKeyValue {
 			ModRevision: revision,
 		})
 	}
+	s.partitionsMut.RUnlock()
+
 	return kvs
 }
 
-func deleteNodesByID(nodes []Node, nodeID NodeID) []Node {
-	result := make([]Node, 0, len(nodes))
-	for _, n := range nodes {
-		if n.ID == nodeID {
+func deleteNodeByID(nodeMap map[NodeID]Node, nodeID NodeID) map[NodeID]Node {
+	result := make(map[NodeID]Node)
+
+	for id, n := range nodeMap {
+		if id == nodeID {
 			continue
 		}
-		result = append(result, n)
+		result[id] = n
 	}
+
+	return result
+}
+
+func addNode(nodeMap map[NodeID]Node, n Node) map[NodeID]Node {
+	result := make(map[NodeID]Node)
+
+	for id, n := range nodeMap {
+		result[id] = n
+	}
+	result[n.ID] = n
+
 	return result
 }
 
 func (s *state) runLoopHandleNodeEvent(nodeEvent NodeEvent) runLoopOutput {
 	if nodeEvent.Type == EtcdEventTypePut {
-		s.nodes = append(s.nodes, Node{
+		s.nodeMapMut.Lock()
+		s.nodeMap = addNode(s.nodeMap, Node{
 			ID:            nodeEvent.NodeID,
 			LastPartition: nodeEvent.LastPartition,
 			ModRevision:   nodeEvent.Revision,
 		})
+		s.nodeMapMut.Unlock()
 	} else if nodeEvent.Type == EtcdEventTypeDelete {
-		s.nodes = deleteNodesByID(s.nodes, nodeEvent.NodeID)
+		s.nodeMapMut.Lock()
+		s.nodeMap = deleteNodeByID(s.nodeMap, nodeEvent.NodeID)
+		s.nodeMapMut.Unlock()
 	}
 
-	sort.Sort(sortNode(s.nodes))
-
 	var kvs []CASKeyValue
-	if len(s.nodes) > 0 && s.leaderNodeID == s.selfNodeID {
+
+	s.nodeMapMut.RLock()
+	nodeMapLen := len(s.nodeMap)
+	s.nodeMapMut.RUnlock()
+
+	if nodeMapLen > 0 && s.leaderNodeID == s.selfNodeID {
 		kvs = s.computePartitionKvs()
 	}
 
@@ -144,6 +211,7 @@ func (s *state) runLoopHandlePartitionEvent(events PartitionEvents) runLoopOutpu
 	var startPartitions []PartitionID
 	var stopPartitions []PartitionID
 
+	s.partitionsMut.Lock()
 	for _, e := range events.Events {
 		oldPartition := s.partitions[e.Partition]
 		oldIsRunning := oldPartition.Persisted && oldPartition.Owner == s.selfNodeID
@@ -174,6 +242,7 @@ func (s *state) runLoopHandlePartitionEvent(events PartitionEvents) runLoopOutpu
 			}
 		}
 	}
+	s.partitionsMut.Unlock()
 
 	return runLoopOutput{
 		startPartitions: startPartitions,
@@ -196,11 +265,14 @@ func (s *state) runLoop(
 		var kvs []CASKeyValue
 		if leaseID != oldLeaseID {
 			modRevision := Revision(0)
-			for _, n := range s.nodes {
-				if n.ID == s.selfNodeID {
+
+			s.nodeMapMut.RLock()
+			for id, n := range s.nodeMap {
+				if id == s.selfNodeID {
 					modRevision = n.ModRevision
 				}
 			}
+			s.nodeMapMut.RUnlock()
 
 			kvs = append(kvs, CASKeyValue{
 				Key:         s.nodePrefix + fmt.Sprintf("%d", s.selfNodeID),
@@ -231,20 +303,28 @@ func (s *state) runLoop(
 
 	case <-after:
 		var kvs []CASKeyValue
-		if len(s.nodes) > 0 && s.leaderNodeID == s.selfNodeID {
+
+		s.nodeMapMut.RLock()
+		nodeMapLen := len(s.nodeMap)
+		s.nodeMapMut.RUnlock()
+
+		if nodeMapLen > 0 && s.leaderNodeID == s.selfNodeID {
 			kvs = s.computePartitionKvs()
 		}
 
 		if s.leaseID != 0 {
 			found := false
 			var node Node
-			for _, n := range s.nodes {
-				if n.ID == s.selfNodeID {
+
+			s.nodeMapMut.RLock()
+			for id, n := range s.nodeMap {
+				if id == s.selfNodeID {
 					found = true
 					node = n
 					break
 				}
 			}
+			s.nodeMapMut.RUnlock()
 
 			if !found || node.LastPartition != s.selfLastPartition {
 				kvs = append(kvs, CASKeyValue{

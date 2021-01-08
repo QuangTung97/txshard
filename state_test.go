@@ -25,8 +25,8 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 				Revision:      100,
 			},
 			stateAfter: func(s *state) {
-				s.nodes = []Node{
-					{
+				s.nodeMap = map[NodeID]Node{
+					1: {
 						ID:            1,
 						LastPartition: 3,
 						ModRevision:   100,
@@ -67,8 +67,8 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 				s.leaderNodeID = 2
 			},
 			stateAfter: func(s *state) {
-				s.nodes = []Node{
-					{
+				s.nodeMap = map[NodeID]Node{
+					1: {
 						ID:            1,
 						LastPartition: 3,
 						ModRevision:   100,
@@ -86,8 +86,8 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 				Revision:      200,
 			},
 			stateBefore: func(s *state) {
-				s.nodes = []Node{
-					{
+				s.nodeMap = map[NodeID]Node{
+					1: {
 						ID:            1,
 						LastPartition: 3,
 						ModRevision:   100,
@@ -95,13 +95,13 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 				}
 			},
 			stateAfter: func(s *state) {
-				s.nodes = []Node{
-					{
+				s.nodeMap = map[NodeID]Node{
+					2: {
 						ID:            2,
 						LastPartition: 1,
 						ModRevision:   200,
 					},
-					{
+					1: {
 						ID:            1,
 						LastPartition: 3,
 						ModRevision:   100,
@@ -138,8 +138,8 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 				Revision:      200,
 			},
 			stateBefore: func(s *state) {
-				s.nodes = []Node{
-					{
+				s.nodeMap = map[NodeID]Node{
+					1: {
 						ID:            1,
 						LastPartition: 3,
 						ModRevision:   100,
@@ -161,13 +161,13 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 				}
 			},
 			stateAfter: func(s *state) {
-				s.nodes = []Node{
-					{
+				s.nodeMap = map[NodeID]Node{
+					2: {
 						ID:            2,
 						LastPartition: 1,
 						ModRevision:   200,
 					},
-					{
+					1: {
 						ID:            1,
 						LastPartition: 3,
 						ModRevision:   100,
@@ -201,13 +201,13 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 				Revision:      300,
 			},
 			stateBefore: func(s *state) {
-				s.nodes = []Node{
-					{
+				s.nodeMap = map[NodeID]Node{
+					2: {
 						ID:            2,
 						LastPartition: 1,
 						ModRevision:   200,
 					},
-					{
+					1: {
 						ID:            1,
 						LastPartition: 3,
 						ModRevision:   100,
@@ -233,8 +233,8 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 				}
 			},
 			stateAfter: func(s *state) {
-				s.nodes = []Node{
-					{
+				s.nodeMap = map[NodeID]Node{
+					2: {
 						ID:            2,
 						LastPartition: 1,
 						ModRevision:   200,
@@ -269,8 +269,8 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 				Revision:      300,
 			},
 			stateBefore: func(s *state) {
-				s.nodes = []Node{
-					{
+				s.nodeMap = map[NodeID]Node{
+					1: {
 						ID:            1,
 						LastPartition: 3,
 						ModRevision:   100,
@@ -296,7 +296,7 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 				}
 			},
 			stateAfter: func(s *state) {
-				s.nodes = []Node{}
+				s.nodeMap = map[NodeID]Node{}
 			},
 			output: runLoopOutput{},
 		},
@@ -313,8 +313,7 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 				e.stateBefore(s)
 			}
 
-			stateAfter := &state{}
-			*stateAfter = *s
+			stateAfter := s.clone()
 			e.stateAfter(stateAfter)
 
 			output := s.runLoop(context.Background(), nil, ch, nil, nil, nil)
@@ -352,13 +351,13 @@ func TestRunLoop_PartitionEvent(t *testing.T) {
 				Revision: 200,
 			},
 			stateBefore: func(s *state) {
-				s.nodes = []Node{
-					{
+				s.nodeMap = map[NodeID]Node{
+					2: {
 						ID:            2,
 						LastPartition: 1,
 						ModRevision:   30,
 					},
-					{
+					1: {
 						ID:            1,
 						LastPartition: 3,
 						ModRevision:   20,
@@ -407,13 +406,13 @@ func TestRunLoop_PartitionEvent(t *testing.T) {
 				Revision: 200,
 			},
 			stateBefore: func(s *state) {
-				s.nodes = []Node{
-					{
+				s.nodeMap = map[NodeID]Node{
+					2: {
 						ID:            2,
 						LastPartition: 1,
 						ModRevision:   30,
 					},
-					{
+					1: {
 						ID:            1,
 						LastPartition: 3,
 						ModRevision:   20,
@@ -464,8 +463,7 @@ func TestRunLoop_PartitionEvent(t *testing.T) {
 				e.stateBefore(s)
 			}
 
-			stateAfter := &state{}
-			*stateAfter = *s
+			stateAfter := s.clone()
 			e.stateAfter(stateAfter)
 
 			output := s.runLoop(context.Background(), nil, nil, ch, nil, nil)
@@ -488,13 +486,13 @@ func TestRunLoop_Retry_After(t *testing.T) {
 			name: "not-leader",
 			stateBefore: func(s *state) {
 				s.leaderNodeID = 2
-				s.nodes = []Node{
-					{
+				s.nodeMap = map[NodeID]Node{
+					2: {
 						ID:            2,
 						LastPartition: 1,
 						ModRevision:   200,
 					},
-					{
+					1: {
 						ID:            1,
 						LastPartition: 3,
 						ModRevision:   100,
@@ -512,13 +510,13 @@ func TestRunLoop_Retry_After(t *testing.T) {
 			name: "leader-with-nodes",
 			stateBefore: func(s *state) {
 				s.leaderNodeID = 1
-				s.nodes = []Node{
-					{
+				s.nodeMap = map[NodeID]Node{
+					2: {
 						ID:            2,
 						LastPartition: 1,
 						ModRevision:   200,
 					},
-					{
+					1: {
 						ID:            1,
 						LastPartition: 3,
 						ModRevision:   100,
@@ -549,8 +547,8 @@ func TestRunLoop_Retry_After(t *testing.T) {
 		{
 			name: "no-node",
 			stateBefore: func(s *state) {
-				s.nodes = []Node{
-					{
+				s.nodeMap = map[NodeID]Node{
+					2: {
 						ID:            2,
 						LastPartition: 1,
 						ModRevision:   101,
@@ -572,8 +570,8 @@ func TestRunLoop_Retry_After(t *testing.T) {
 		{
 			name: "have-node-do-nothing",
 			stateBefore: func(s *state) {
-				s.nodes = []Node{
-					{
+				s.nodeMap = map[NodeID]Node{
+					1: {
 						ID:            1,
 						LastPartition: 3,
 						ModRevision:   101,
@@ -586,8 +584,8 @@ func TestRunLoop_Retry_After(t *testing.T) {
 		{
 			name: "have-node-not-the-same",
 			stateBefore: func(s *state) {
-				s.nodes = []Node{
-					{
+				s.nodeMap = map[NodeID]Node{
+					1: {
 						ID:            1,
 						LastPartition: 2,
 						ModRevision:   101,
@@ -619,8 +617,7 @@ func TestRunLoop_Retry_After(t *testing.T) {
 				e.stateBefore(s)
 			}
 
-			stateAfter := &state{}
-			*stateAfter = *s
+			stateAfter := s.clone()
 
 			if e.stateAfter != nil {
 				e.stateAfter(stateAfter)
@@ -694,8 +691,7 @@ func TestRunLoop_LeaderEvent(t *testing.T) {
 				e.stateBefore(s)
 			}
 
-			stateAfter := &state{}
-			*stateAfter = *s
+			stateAfter := s.clone()
 			e.stateAfter(stateAfter)
 
 			output := s.runLoop(context.Background(), nil, nil, nil, ch, nil)
@@ -748,8 +744,8 @@ func TestRunLoop_Leases(t *testing.T) {
 			stateBefore: func(s *state) {
 				s.leaseID = 11122
 
-				s.nodes = []Node{
-					{
+				s.nodeMap = map[NodeID]Node{
+					12: {
 						ID:            12,
 						LastPartition: 3,
 						ModRevision:   331,
@@ -780,8 +776,8 @@ func TestRunLoop_Leases(t *testing.T) {
 			stateBefore: func(s *state) {
 				s.leaseID = 12233
 
-				s.nodes = []Node{
-					{
+				s.nodeMap = map[NodeID]Node{
+					12: {
 						ID:            12,
 						LastPartition: 3,
 						ModRevision:   331,
@@ -806,8 +802,7 @@ func TestRunLoop_Leases(t *testing.T) {
 				e.stateBefore(s)
 			}
 
-			stateAfter := &state{}
-			*stateAfter = *s
+			stateAfter := s.clone()
 			e.stateAfter(stateAfter)
 
 			output := s.runLoop(context.Background(), ch, nil, nil, nil, nil)
