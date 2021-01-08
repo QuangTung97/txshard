@@ -17,7 +17,6 @@ type Node struct {
 // Partition ...
 type Partition struct {
 	Persisted   bool
-	IsRunning   bool
 	Leader      NodeID
 	ModRevision Revision
 }
@@ -136,19 +135,27 @@ func (s *state) runLoopHandlePartitionEvent(events PartitionEvents) runLoopOutpu
 	var stopPartitions []PartitionID
 
 	for _, e := range events.Events {
+		oldPartition := s.partitions[e.Partition]
+		oldIsRunning := oldPartition.Persisted && oldPartition.Leader == s.selfNodeID
+
+		var newPartition Partition
 		if e.Type == EtcdEventTypePut {
-			s.partitions[e.Partition].Persisted = true
-			s.partitions[e.Partition].Leader = e.Leader
-			s.partitions[e.Partition].ModRevision = events.Revision
+			newPartition = Partition{
+				Persisted:   true,
+				Leader:      e.Leader,
+				ModRevision: events.Revision,
+			}
 		} else {
-			s.partitions[e.Partition].Persisted = false
-			s.partitions[e.Partition].Leader = 0
-			s.partitions[e.Partition].ModRevision = 0
+			newPartition = Partition{
+				Persisted:   false,
+				Leader:      0,
+				ModRevision: 0,
+			}
 		}
 
-		oldIsRunning := s.partitions[e.Partition].IsRunning
-		newIsRunning := e.Type == EtcdEventTypePut && e.Leader == s.selfNodeID
+		s.partitions[e.Partition] = newPartition
 
+		newIsRunning := newPartition.Persisted && newPartition.Leader == s.selfNodeID
 		if newIsRunning != oldIsRunning {
 			if newIsRunning {
 				startPartitions = append(startPartitions, e.Partition)
@@ -156,7 +163,6 @@ func (s *state) runLoopHandlePartitionEvent(events PartitionEvents) runLoopOutpu
 				stopPartitions = append(stopPartitions, e.Partition)
 			}
 		}
-		s.partitions[e.Partition].IsRunning = newIsRunning
 	}
 
 	return runLoopOutput{
@@ -165,7 +171,8 @@ func (s *state) runLoopHandlePartitionEvent(events PartitionEvents) runLoopOutpu
 	}
 }
 
-func (s *state) runLoop(ctx context.Context,
+func (s *state) runLoop(
+	ctx context.Context,
 	nodeEvents <-chan NodeEvent,
 	partitionEventsChan <-chan PartitionEvents,
 	after <-chan time.Time,

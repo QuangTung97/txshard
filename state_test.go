@@ -329,14 +329,12 @@ func TestRunLoop_PartitionEvent(t *testing.T) {
 				s.partitions = []Partition{
 					{
 						Persisted:   true,
-						IsRunning:   true,
 						Leader:      1,
 						ModRevision: 200,
 					},
 					{},
 					{
 						Persisted:   true,
-						IsRunning:   false,
 						Leader:      2,
 						ModRevision: 200,
 					},
@@ -384,7 +382,6 @@ func TestRunLoop_PartitionEvent(t *testing.T) {
 				s.partitions = []Partition{
 					{
 						Persisted:   true,
-						IsRunning:   true,
 						Leader:      1,
 						ModRevision: 80,
 					},
@@ -398,13 +395,11 @@ func TestRunLoop_PartitionEvent(t *testing.T) {
 					{},
 					{
 						Persisted:   true,
-						IsRunning:   true,
 						Leader:      1,
 						ModRevision: 200,
 					},
 					{
 						Persisted:   true,
-						IsRunning:   false,
 						Leader:      2,
 						ModRevision: 200,
 					},
