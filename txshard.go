@@ -7,10 +7,14 @@ import (
 // Revision ...
 type Revision int64
 
+// LeaseID ...
+type LeaseID int64
+
 // CASKeyValue ...
 type CASKeyValue struct {
 	Key         string
 	Value       string
+	LeaseID     LeaseID
 	ModRevision Revision
 }
 
@@ -48,9 +52,11 @@ type NodeEvent struct {
 	Type          EtcdEventType
 	NodeID        NodeID
 	LastPartition PartitionID
+	LeaseID       LeaseID
 	Revision      Revision
 }
 
+// LeaderEvent ...
 type LeaderEvent struct {
 	Type   EtcdEventType
 	Leader NodeID
