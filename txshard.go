@@ -42,7 +42,7 @@ type NodeID uint32
 type PartitionEvent struct {
 	Type      EtcdEventType
 	Partition PartitionID
-	Leader    NodeID
+	Owner     NodeID
 }
 
 // PartitionEvents ...
@@ -91,7 +91,6 @@ type Processor struct {
 	leaseChan     <-chan LeaseID
 	nodeChan      <-chan NodeEvent
 	partitionChan <-chan PartitionEvents
-	leaderChan    <-chan LeaderEvent
 
 	activeMap map[PartitionID]activeRunner
 	wg        sync.WaitGroup
@@ -112,7 +111,6 @@ type Config struct {
 	LeaseChan     <-chan LeaseID
 	NodeChan      <-chan NodeEvent
 	PartitionChan <-chan PartitionEvents
-	LeaderChan    <-chan LeaderEvent
 }
 
 // NewProcessor ...
@@ -135,7 +133,6 @@ func NewProcessor(conf Config) *Processor {
 		leaseChan:     conf.LeaseChan,
 		nodeChan:      conf.NodeChan,
 		partitionChan: conf.PartitionChan,
-		leaderChan:    conf.LeaderChan,
 	}
 }
 
@@ -143,7 +140,7 @@ func NewProcessor(conf Config) *Processor {
 func (p *Processor) Run(ctx context.Context) {
 	var after <-chan time.Time
 	for {
-		output := p.state.runLoop(ctx, p.leaseChan, p.nodeChan, p.partitionChan, p.leaderChan, after)
+		output := p.state.runLoop(ctx, p.leaseChan, p.nodeChan, p.partitionChan, after)
 		if ctx.Err() != nil {
 			p.wg.Wait()
 			return

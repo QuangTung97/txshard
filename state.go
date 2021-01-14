@@ -31,8 +31,7 @@ type state struct {
 	selfNodeID        NodeID
 	selfLastPartition PartitionID
 
-	leaseID      LeaseID
-	leaderNodeID NodeID
+	leaseID LeaseID
 
 	nodeMapMut sync.RWMutex
 	nodeMap    map[NodeID]Node
@@ -66,8 +65,7 @@ func (s *state) clone() *state {
 		selfNodeID:        s.selfNodeID,
 		selfLastPartition: s.selfLastPartition,
 
-		leaseID:      s.leaseID,
-		leaderNodeID: s.leaderNodeID,
+		leaseID: s.leaseID,
 
 		nodeMap:    s.nodeMap,
 		partitions: s.partitions,
@@ -117,7 +115,7 @@ func computeNodeIDFromPartitionID(nodes []Node, partition PartitionID) NodeID {
 	return nodes[0].ID
 }
 
-func (s *state) computePartitionKvs() []CASKeyValue {
+func (s *state) computePartitionsActions() runLoopOutput {
 	s.nodeMapMut.RLock()
 	nodes := make([]Node, 0, len(s.nodeMap))
 	for _, n := range s.nodeMap {
@@ -127,31 +125,17 @@ func (s *state) computePartitionKvs() []CASKeyValue {
 
 	sort.Sort(sortNode(nodes))
 
-	kvs := make([]CASKeyValue, 0)
+	output := runLoopOutput{}
 
 	s.partitionsMut.RLock()
 	for partitionID := PartitionID(0); partitionID < s.partitionCount; partitionID++ {
 		nodeID := computeNodeIDFromPartitionID(nodes, partitionID)
-		partition := s.partitions[partitionID]
 
-		if partition.Persisted && partition.Owner == nodeID {
-			continue
-		}
-
-		revision := Revision(0)
-		if partition.Persisted {
-			revision = partition.ModRevision
-		}
-
-		kvs = append(kvs, CASKeyValue{
-			Key:         s.partitionPrefix + fmt.Sprintf("%d", partitionID),
-			Value:       fmt.Sprintf("%d", nodeID),
-			ModRevision: revision,
-		})
+		output = s.partitionActionsToOutput(output, partitionID, nodeID == s.selfNodeID)
 	}
 	s.partitionsMut.RUnlock()
 
-	return kvs
+	return output
 }
 
 func deleteNodeByID(nodeMap map[NodeID]Node, nodeID NodeID) map[NodeID]Node {
@@ -193,35 +177,25 @@ func (s *state) runLoopHandleNodeEvent(nodeEvent NodeEvent) runLoopOutput {
 		s.nodeMapMut.Unlock()
 	}
 
-	var kvs []CASKeyValue
-
 	s.nodeMapMut.RLock()
 	nodeMapLen := len(s.nodeMap)
 	s.nodeMapMut.RUnlock()
 
-	if nodeMapLen > 0 && s.leaderNodeID == s.selfNodeID {
-		kvs = s.computePartitionKvs()
+	if nodeMapLen > 0 {
+		return s.computePartitionsActions()
 	}
 
-	return runLoopOutput{
-		kvs: kvs,
-	}
+	return runLoopOutput{}
 }
 
 func (s *state) runLoopHandlePartitionEvent(events PartitionEvents) runLoopOutput {
-	var startPartitions []PartitionID
-	var stopPartitions []PartitionID
-
 	s.partitionsMut.Lock()
 	for _, e := range events.Events {
-		oldPartition := s.partitions[e.Partition]
-		oldIsRunning := oldPartition.Persisted && oldPartition.Owner == s.selfNodeID
-
 		var newPartition Partition
 		if e.Type == EtcdEventTypePut {
 			newPartition = Partition{
 				Persisted:   true,
-				Owner:       e.Leader,
+				Owner:       e.Owner,
 				ModRevision: events.Revision,
 			}
 		} else {
@@ -233,22 +207,10 @@ func (s *state) runLoopHandlePartitionEvent(events PartitionEvents) runLoopOutpu
 		}
 
 		s.partitions[e.Partition] = newPartition
-
-		newIsRunning := newPartition.Persisted && newPartition.Owner == s.selfNodeID
-		if newIsRunning != oldIsRunning {
-			if newIsRunning {
-				startPartitions = append(startPartitions, e.Partition)
-			} else {
-				stopPartitions = append(stopPartitions, e.Partition)
-			}
-		}
 	}
 	s.partitionsMut.Unlock()
 
-	return runLoopOutput{
-		startPartitions: startPartitions,
-		stopPartitions:  stopPartitions,
-	}
+	return s.computePartitionsActions()
 }
 
 func (s *state) partitionActionsToOutput(output runLoopOutput, id PartitionID, isLeader bool) runLoopOutput {
@@ -296,7 +258,7 @@ func (s *state) computeSelfNodeActions(kvs []CASKeyValue, needUpdate bool) []CAS
 	modRevision := Revision(0)
 
 	s.nodeMapMut.RLock()
-	node , ok := s.nodeMap[s.selfNodeID]
+	node, ok := s.nodeMap[s.selfNodeID]
 	s.nodeMapMut.RUnlock()
 
 	if ok {
@@ -321,7 +283,6 @@ func (s *state) runLoop(
 	leaseEvents <-chan LeaseID,
 	nodeEvents <-chan NodeEvent,
 	partitionEventsChan <-chan PartitionEvents,
-	leaderEvents <-chan LeaderEvent,
 	after <-chan time.Time,
 ) runLoopOutput {
 	select {
@@ -344,30 +305,17 @@ func (s *state) runLoop(
 	case partitionEvent := <-partitionEventsChan:
 		return s.runLoopHandlePartitionEvent(partitionEvent)
 
-	case leaderEvent := <-leaderEvents:
-		if leaderEvent.Type == EtcdEventTypePut {
-			s.leaderNodeID = leaderEvent.Leader
-		} else {
-			s.leaderNodeID = 0
-		}
-		return runLoopOutput{}
-
 	case <-after:
-		var kvs []CASKeyValue
-
 		s.nodeMapMut.RLock()
 		nodeMapLen := len(s.nodeMap)
 		s.nodeMapMut.RUnlock()
 
-		if nodeMapLen > 0 && s.leaderNodeID == s.selfNodeID {
-			kvs = s.computePartitionKvs()
+		output := runLoopOutput{}
+		if nodeMapLen > 0 {
+			output = s.computePartitionsActions()
 		}
-
-		kvs = s.computeSelfNodeActions(kvs, false)
-
-		return runLoopOutput{
-			kvs: kvs,
-		}
+		output.kvs = s.computeSelfNodeActions(output.kvs, false)
+		return output
 
 	case <-ctx.Done():
 		return runLoopOutput{}

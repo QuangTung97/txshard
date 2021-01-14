@@ -9,25 +9,34 @@ import (
 
 func TestState_RunLoop_NodeEvent(t *testing.T) {
 	table := []struct {
-		name        string
-		event       NodeEvent
+		name string
+
+		event NodeEvent
+
+		selfNodeID        NodeID
+		selfLastPartition PartitionID
+
 		stateBefore func(s *state)
 		stateAfter  func(s *state)
 
 		output runLoopOutput
 	}{
 		{
-			name: "add-node",
+			name: "add-node-same-as-self",
 			event: NodeEvent{
 				Type:          EtcdEventTypePut,
-				NodeID:        1,
+				NodeID:        7,
 				LastPartition: 3,
 				Revision:      100,
 			},
+			selfNodeID: 7,
+			stateBefore: func(s *state) {
+				s.leaseID = 555
+			},
 			stateAfter: func(s *state) {
 				s.nodeMap = map[NodeID]Node{
-					1: {
-						ID:            1,
+					7: {
+						ID:            7,
 						LastPartition: 3,
 						ModRevision:   100,
 					},
@@ -36,46 +45,31 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 			output: runLoopOutput{
 				kvs: []CASKeyValue{
 					{
-						Key:   "/partition/0",
-						Value: "1",
+						Type:    EtcdEventTypePut,
+						Key:     "/partition/0",
+						Value:   "7",
+						LeaseID: 555,
 					},
 					{
-						Key:   "/partition/1",
-						Value: "1",
+						Type:    EtcdEventTypePut,
+						Key:     "/partition/1",
+						Value:   "7",
+						LeaseID: 555,
 					},
 					{
-						Key:   "/partition/2",
-						Value: "1",
+						Type:    EtcdEventTypePut,
+						Key:     "/partition/2",
+						Value:   "7",
+						LeaseID: 555,
 					},
 					{
-						Key:   "/partition/3",
-						Value: "1",
+						Type:    EtcdEventTypePut,
+						Key:     "/partition/3",
+						Value:   "7",
+						LeaseID: 555,
 					},
 				},
 			},
-		},
-		{
-			name: "add-node-not-leader",
-			event: NodeEvent{
-				Type:          EtcdEventTypePut,
-				NodeID:        1,
-				LastPartition: 3,
-				Revision:      100,
-			},
-			stateBefore: func(s *state) {
-				s.selfNodeID = 1
-				s.leaderNodeID = 2
-			},
-			stateAfter: func(s *state) {
-				s.nodeMap = map[NodeID]Node{
-					1: {
-						ID:            1,
-						LastPartition: 3,
-						ModRevision:   100,
-					},
-				}
-			},
-			output: runLoopOutput{},
 		},
 		{
 			name: "add-two-nodes",
@@ -85,7 +79,9 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 				NodeID:        2,
 				Revision:      200,
 			},
+			selfNodeID: 1,
 			stateBefore: func(s *state) {
+				s.leaseID = 512
 				s.nodeMap = map[NodeID]Node{
 					1: {
 						ID:            1,
@@ -111,20 +107,16 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 			output: runLoopOutput{
 				kvs: []CASKeyValue{
 					{
-						Key:   "/partition/0",
-						Value: "2",
+						Type:    EtcdEventTypePut,
+						Key:     "/partition/2",
+						Value:   "1",
+						LeaseID: 512,
 					},
 					{
-						Key:   "/partition/1",
-						Value: "2",
-					},
-					{
-						Key:   "/partition/2",
-						Value: "1",
-					},
-					{
-						Key:   "/partition/3",
-						Value: "1",
+						Type:    EtcdEventTypePut,
+						Key:     "/partition/3",
+						Value:   "1",
+						LeaseID: 512,
 					},
 				},
 			},
@@ -137,7 +129,9 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 				NodeID:        2,
 				Revision:      200,
 			},
+			selfNodeID: 1,
 			stateBefore: func(s *state) {
+				s.leaseID = 666
 				s.nodeMap = map[NodeID]Node{
 					1: {
 						ID:            1,
@@ -156,7 +150,7 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 					{
 						Persisted:   true,
 						Owner:       1,
-						ModRevision: 120,
+						ModRevision: 130,
 					},
 				}
 			},
@@ -177,19 +171,18 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 			output: runLoopOutput{
 				kvs: []CASKeyValue{
 					{
+						Type:        EtcdEventTypeDelete,
 						Key:         "/partition/0",
-						Value:       "2",
 						ModRevision: 120,
 					},
 					{
-						Key:   "/partition/1",
-						Value: "2",
-					},
-					{
-						Key:   "/partition/2",
-						Value: "1",
+						Type:    EtcdEventTypePut,
+						Key:     "/partition/2",
+						Value:   "1",
+						LeaseID: 666,
 					},
 				},
+				startPartitions: []PartitionID{3},
 			},
 		},
 		{
@@ -200,7 +193,9 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 				LastPartition: 3,
 				Revision:      300,
 			},
+			selfNodeID: 1,
 			stateBefore: func(s *state) {
+				s.leaseID = 777
 				s.nodeMap = map[NodeID]Node{
 					2: {
 						ID:            2,
@@ -218,6 +213,7 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 						Persisted:   true,
 						Owner:       1,
 						ModRevision: 120,
+						Running:     true,
 					},
 					{
 						Persisted:   true,
@@ -228,7 +224,7 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 					{
 						Persisted:   true,
 						Owner:       1,
-						ModRevision: 120,
+						ModRevision: 140,
 					},
 				}
 			},
@@ -244,20 +240,17 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 			output: runLoopOutput{
 				kvs: []CASKeyValue{
 					{
+						Type:        EtcdEventTypeDelete,
 						Key:         "/partition/0",
-						Value:       "2",
 						ModRevision: 120,
 					},
 					{
-						Key:   "/partition/2",
-						Value: "2",
-					},
-					{
+						Type:        EtcdEventTypeDelete,
 						Key:         "/partition/3",
-						Value:       "2",
-						ModRevision: 120,
+						ModRevision: 140,
 					},
 				},
+				stopPartitions: []PartitionID{0},
 			},
 		},
 		{
@@ -307,7 +300,7 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 			ch := make(chan NodeEvent, 1)
 			ch <- e.event
 
-			s := newState(4, "/partition/", "/node/", 0, 3)
+			s := newState(4, "/partition/", "/node/", e.selfNodeID, e.selfLastPartition)
 
 			if e.stateBefore != nil {
 				e.stateBefore(s)
@@ -316,7 +309,7 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 			stateAfter := s.clone()
 			e.stateAfter(stateAfter)
 
-			output := s.runLoop(context.Background(), nil, ch, nil, nil, nil)
+			output := s.runLoop(context.Background(), nil, ch, nil, nil)
 
 			assert.Equal(t, stateAfter, s)
 			assert.Equal(t, e.output, output)
@@ -334,18 +327,82 @@ func TestRunLoop_PartitionEvent(t *testing.T) {
 		output runLoopOutput
 	}{
 		{
-			name: "add-two-partition",
+			name: "add-two-partition.lease-exist",
 			event: PartitionEvents{
 				Events: []PartitionEvent{
 					{
 						Type:      EtcdEventTypePut,
 						Partition: 0,
-						Leader:    1,
+						Owner:     1,
 					},
 					{
 						Type:      EtcdEventTypePut,
 						Partition: 2,
-						Leader:    2,
+						Owner:     2,
+					},
+				},
+				Revision: 200,
+			},
+			stateBefore: func(s *state) {
+				s.leaseID = 222
+				s.nodeMap = map[NodeID]Node{
+					2: {
+						ID:            2,
+						LastPartition: 1,
+						ModRevision:   30,
+					},
+					1: {
+						ID:            1,
+						LastPartition: 3,
+						ModRevision:   20,
+					},
+				}
+			},
+			stateAfter: func(s *state) {
+				s.partitions = []Partition{
+					{
+						Persisted:   true,
+						Owner:       1,
+						ModRevision: 200,
+					},
+					{},
+					{
+						Persisted:   true,
+						Owner:       2,
+						ModRevision: 200,
+					},
+					{},
+				}
+			},
+			output: runLoopOutput{
+				kvs: []CASKeyValue{
+					{
+						Type:        EtcdEventTypeDelete,
+						Key:         "/partition/0",
+						ModRevision: 200,
+					},
+					{
+						Type:    EtcdEventTypePut,
+						Key:     "/partition/3",
+						Value:   "1",
+						LeaseID: 222,
+					},
+				},
+			},
+		},
+		{
+			name: "add-two-partition.lease-not-exist",
+			event: PartitionEvents{
+				Events: []PartitionEvent{
+					{
+						Type:      EtcdEventTypePut,
+						Partition: 0,
+						Owner:     1,
+					},
+					{
+						Type:      EtcdEventTypePut,
+						Partition: 2,
+						Owner:     2,
 					},
 				},
 				Revision: 200,
@@ -381,7 +438,13 @@ func TestRunLoop_PartitionEvent(t *testing.T) {
 				}
 			},
 			output: runLoopOutput{
-				startPartitions: []PartitionID{0},
+				kvs: []CASKeyValue{
+					{
+						Type:        EtcdEventTypeDelete,
+						Key:         "/partition/0",
+						ModRevision: 200,
+					},
+				},
 			},
 		},
 		{
@@ -395,17 +458,18 @@ func TestRunLoop_PartitionEvent(t *testing.T) {
 					{
 						Type:      EtcdEventTypePut,
 						Partition: 2,
-						Leader:    2,
+						Owner:     2,
 					},
 					{
 						Type:      EtcdEventTypePut,
 						Partition: 1,
-						Leader:    1,
+						Owner:     1,
 					},
 				},
 				Revision: 200,
 			},
 			stateBefore: func(s *state) {
+				s.leaseID = 212
 				s.nodeMap = map[NodeID]Node{
 					2: {
 						ID:            2,
@@ -446,8 +510,19 @@ func TestRunLoop_PartitionEvent(t *testing.T) {
 				}
 			},
 			output: runLoopOutput{
-				startPartitions: []PartitionID{1},
-				stopPartitions:  []PartitionID{0},
+				kvs: []CASKeyValue{
+					{
+						Type:        EtcdEventTypeDelete,
+						Key:         "/partition/1",
+						ModRevision: 200,
+					},
+					{
+						Type:    EtcdEventTypePut,
+						Key:     "/partition/3",
+						Value:   "1",
+						LeaseID: 212,
+					},
+				},
 			},
 		},
 	}
@@ -466,7 +541,7 @@ func TestRunLoop_PartitionEvent(t *testing.T) {
 			stateAfter := s.clone()
 			e.stateAfter(stateAfter)
 
-			output := s.runLoop(context.Background(), nil, nil, ch, nil, nil)
+			output := s.runLoop(context.Background(), nil, nil, ch, nil)
 
 			assert.Equal(t, stateAfter, s)
 			assert.Equal(t, e.output, output)
@@ -482,68 +557,6 @@ func TestRunLoop_Retry_After(t *testing.T) {
 
 		output runLoopOutput
 	}{
-		{
-			name: "not-leader",
-			stateBefore: func(s *state) {
-				s.leaderNodeID = 2
-				s.nodeMap = map[NodeID]Node{
-					2: {
-						ID:            2,
-						LastPartition: 1,
-						ModRevision:   200,
-					},
-					1: {
-						ID:            1,
-						LastPartition: 3,
-						ModRevision:   100,
-					},
-				}
-			},
-		},
-		{
-			name: "leader-without-nodes",
-			stateBefore: func(s *state) {
-				s.leaderNodeID = 1
-			},
-		},
-		{
-			name: "leader-with-nodes",
-			stateBefore: func(s *state) {
-				s.leaderNodeID = 1
-				s.nodeMap = map[NodeID]Node{
-					2: {
-						ID:            2,
-						LastPartition: 1,
-						ModRevision:   200,
-					},
-					1: {
-						ID:            1,
-						LastPartition: 3,
-						ModRevision:   100,
-					},
-				}
-			},
-			output: runLoopOutput{
-				kvs: []CASKeyValue{
-					{
-						Key:   "/partition/0",
-						Value: "2",
-					},
-					{
-						Key:   "/partition/1",
-						Value: "2",
-					},
-					{
-						Key:   "/partition/2",
-						Value: "1",
-					},
-					{
-						Key:   "/partition/3",
-						Value: "1",
-					},
-				},
-			},
-		},
 		{
 			name: "no-node",
 			stateBefore: func(s *state) {
@@ -569,7 +582,7 @@ func TestRunLoop_Retry_After(t *testing.T) {
 			},
 		},
 		{
-			name: "have-node-do-nothing",
+			name: "have-node-do-put-partitions",
 			stateBefore: func(s *state) {
 				s.nodeMap = map[NodeID]Node{
 					1: {
@@ -580,10 +593,37 @@ func TestRunLoop_Retry_After(t *testing.T) {
 				}
 				s.leaseID = 5566
 			},
-			output: runLoopOutput{},
+			output: runLoopOutput{
+				kvs: []CASKeyValue{
+					{
+						Type:    EtcdEventTypePut,
+						Key:     "/partition/0",
+						Value:   "1",
+						LeaseID: 5566,
+					},
+					{
+						Type:    EtcdEventTypePut,
+						Key:     "/partition/1",
+						Value:   "1",
+						LeaseID: 5566,
+					},
+					{
+						Type:    EtcdEventTypePut,
+						Key:     "/partition/2",
+						Value:   "1",
+						LeaseID: 5566,
+					},
+					{
+						Type:    EtcdEventTypePut,
+						Key:     "/partition/3",
+						Value:   "1",
+						LeaseID: 5566,
+					},
+				},
+			},
 		},
 		{
-			name: "have-node-not-the-same",
+			name: "have-node-not-the-same-last-partition",
 			stateBefore: func(s *state) {
 				s.nodeMap = map[NodeID]Node{
 					1: {
@@ -596,6 +636,30 @@ func TestRunLoop_Retry_After(t *testing.T) {
 			},
 			output: runLoopOutput{
 				kvs: []CASKeyValue{
+					{
+						Type:    EtcdEventTypePut,
+						Key:     "/partition/0",
+						Value:   "1",
+						LeaseID: 5566,
+					},
+					{
+						Type:    EtcdEventTypePut,
+						Key:     "/partition/1",
+						Value:   "1",
+						LeaseID: 5566,
+					},
+					{
+						Type:    EtcdEventTypePut,
+						Key:     "/partition/2",
+						Value:   "1",
+						LeaseID: 5566,
+					},
+					{
+						Type:    EtcdEventTypePut,
+						Key:     "/partition/3",
+						Value:   "1",
+						LeaseID: 5566,
+					},
 					{
 						Type:        EtcdEventTypePut,
 						Key:         "/node/1",
@@ -625,7 +689,7 @@ func TestRunLoop_Retry_After(t *testing.T) {
 				e.stateAfter(stateAfter)
 			}
 
-			output := s.runLoop(context.Background(), nil, nil, nil, nil, ch)
+			output := s.runLoop(context.Background(), nil, nil, nil, ch)
 
 			assert.Equal(t, stateAfter, s)
 			assert.Equal(t, e.output, output)
@@ -640,68 +704,8 @@ func TestRunLoop_Context_Cancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(ctx)
 	cancel()
 
-	output := s.runLoop(ctx, nil, nil, nil, nil, nil)
+	output := s.runLoop(ctx, nil, nil, nil, nil)
 	assert.Equal(t, runLoopOutput{}, output)
-}
-
-func TestRunLoop_LeaderEvent(t *testing.T) {
-	table := []struct {
-		name        string
-		event       LeaderEvent
-		stateBefore func(s *state)
-		stateAfter  func(s *state)
-
-		output runLoopOutput
-	}{
-		{
-			name: "put-leader",
-			event: LeaderEvent{
-				Type:   EtcdEventTypePut,
-				Leader: 2,
-			},
-			stateBefore: func(s *state) {
-				s.selfNodeID = 1
-				s.leaderNodeID = 0
-			},
-			stateAfter: func(s *state) {
-				s.leaderNodeID = 2
-			},
-		},
-		{
-			name: "delete-leader",
-			event: LeaderEvent{
-				Type: EtcdEventTypeDelete,
-			},
-			stateBefore: func(s *state) {
-				s.selfNodeID = 1
-				s.leaderNodeID = 2
-			},
-			stateAfter: func(s *state) {
-				s.leaderNodeID = 0
-			},
-		},
-	}
-
-	for _, e := range table {
-		t.Run(e.name, func(t *testing.T) {
-			ch := make(chan LeaderEvent, 1)
-			ch <- e.event
-
-			s := newState(4, "/partition/", "/node/", 1, 3)
-
-			if e.stateBefore != nil {
-				e.stateBefore(s)
-			}
-
-			stateAfter := s.clone()
-			e.stateAfter(stateAfter)
-
-			output := s.runLoop(context.Background(), nil, nil, nil, ch, nil)
-
-			assert.Equal(t, stateAfter, s)
-			assert.Equal(t, e.output, output)
-		})
-	}
 }
 
 func TestRunLoop_Leases(t *testing.T) {
@@ -809,7 +813,7 @@ func TestRunLoop_Leases(t *testing.T) {
 			stateAfter := s.clone()
 			e.stateAfter(stateAfter)
 
-			output := s.runLoop(context.Background(), ch, nil, nil, nil, nil)
+			output := s.runLoop(context.Background(), ch, nil, nil, nil)
 
 			assert.Equal(t, stateAfter, s)
 			assert.Equal(t, e.output, output)
