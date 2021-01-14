@@ -559,6 +559,7 @@ func TestRunLoop_Retry_After(t *testing.T) {
 			output: runLoopOutput{
 				kvs: []CASKeyValue{
 					{
+						Type:        EtcdEventTypePut,
 						Key:         "/node/1",
 						Value:       "3",
 						LeaseID:     5566,
@@ -596,10 +597,11 @@ func TestRunLoop_Retry_After(t *testing.T) {
 			output: runLoopOutput{
 				kvs: []CASKeyValue{
 					{
+						Type:        EtcdEventTypePut,
 						Key:         "/node/1",
 						Value:       "3",
 						LeaseID:     5566,
-						ModRevision: 0,
+						ModRevision: 101,
 					},
 				},
 			},
@@ -726,6 +728,7 @@ func TestRunLoop_Leases(t *testing.T) {
 			output: runLoopOutput{
 				kvs: []CASKeyValue{
 					{
+						Type:        EtcdEventTypePut,
 						Key:         "/node/12",
 						Value:       "2",
 						LeaseID:     12233,
@@ -758,6 +761,7 @@ func TestRunLoop_Leases(t *testing.T) {
 			output: runLoopOutput{
 				kvs: []CASKeyValue{
 					{
+						Type:        EtcdEventTypePut,
 						Key:         "/node/12",
 						Value:       "3",
 						LeaseID:     12233,
@@ -809,6 +813,104 @@ func TestRunLoop_Leases(t *testing.T) {
 
 			assert.Equal(t, stateAfter, s)
 			assert.Equal(t, e.output, output)
+		})
+	}
+}
+
+func TestPartitionActionsToOutput(t *testing.T) {
+	table := []struct {
+		name       string
+		preOutput  runLoopOutput
+		id         PartitionID
+		selfNodeID NodeID
+		leaseID    LeaseID
+		isLeader   bool
+		partition  Partition
+
+		expected runLoopOutput
+	}{
+		{
+			name:      "not-leader.not-persisted.not-running",
+			partition: Partition{},
+		},
+		{
+			name:       "leader.not-persisted.not-running",
+			isLeader:   true,
+			leaseID:    55,
+			id:         11,
+			selfNodeID: 33,
+			partition: Partition{
+				ModRevision: 123,
+			},
+			expected: runLoopOutput{
+				kvs: []CASKeyValue{
+					{
+						Type:        EtcdEventTypePut,
+						Key:         "/partition/11",
+						Value:       "33",
+						LeaseID:     55,
+						ModRevision: 123,
+					},
+				},
+			},
+		},
+		{
+			name:       "leader.not-persisted.not-running.without-lease",
+			isLeader:   true,
+			id:         11,
+			selfNodeID: 33,
+			partition: Partition{
+				ModRevision: 123,
+			},
+			expected: runLoopOutput{},
+		},
+		{
+			name:       "not-leader.persisted-same.running",
+			isLeader:   false,
+			id:         9,
+			selfNodeID: 33,
+			partition: Partition{
+				Persisted:   true,
+				Owner:       33,
+				ModRevision: 123,
+				Running:     true,
+			},
+			expected: runLoopOutput{
+				kvs: []CASKeyValue{
+					{
+						Type:        EtcdEventTypeDelete,
+						Key:         "/partition/9",
+						ModRevision: 123,
+					},
+				},
+				stopPartitions: []PartitionID{9},
+			},
+		},
+		{
+			name:       "leader.persisted-same.not-running",
+			isLeader:   true,
+			id:         9,
+			selfNodeID: 33,
+			partition: Partition{
+				Persisted:   true,
+				Owner:       33,
+				ModRevision: 123,
+				Running:     false,
+			},
+			expected: runLoopOutput{
+				startPartitions: []PartitionID{9},
+			},
+		},
+	}
+
+	for _, e := range table {
+		t.Run(e.name, func(t *testing.T) {
+			s := newState(12, "/partition/", "/node/", e.selfNodeID, 1)
+			s.leaseID = e.leaseID
+			s.partitions[e.id] = e.partition
+
+			output := s.partitionActionsToOutput(e.preOutput, e.id, e.isLeader)
+			assert.Equal(t, e.expected, output)
 		})
 	}
 }

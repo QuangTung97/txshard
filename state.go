@@ -19,6 +19,7 @@ type Node struct {
 type Partition struct {
 	Persisted   bool
 	Owner       NodeID
+	Running     bool
 	ModRevision Revision
 }
 
@@ -250,6 +251,71 @@ func (s *state) runLoopHandlePartitionEvent(events PartitionEvents) runLoopOutpu
 	}
 }
 
+func (s *state) partitionActionsToOutput(output runLoopOutput, id PartitionID, isLeader bool) runLoopOutput {
+	persisted := s.partitions[id].Persisted
+	isSame := s.partitions[id].Owner == s.selfNodeID
+	running := s.partitions[id].Running
+
+	actions := computePartitionActions(isLeader, persisted, isSame, running)
+	if s.leaseID != 0 {
+		if actions.put {
+			output.kvs = append(output.kvs, CASKeyValue{
+				Type:        EtcdEventTypePut,
+				Key:         s.partitionPrefix + fmt.Sprintf("%d", id),
+				Value:       fmt.Sprintf("%d", s.selfNodeID),
+				LeaseID:     s.leaseID,
+				ModRevision: s.partitions[id].ModRevision,
+			})
+		}
+	}
+
+	if actions.delete {
+		output.kvs = append(output.kvs, CASKeyValue{
+			Type:        EtcdEventTypeDelete,
+			Key:         s.partitionPrefix + fmt.Sprintf("%d", id),
+			ModRevision: s.partitions[id].ModRevision,
+		})
+	}
+
+	if actions.start {
+		output.startPartitions = append(output.startPartitions, id)
+	}
+
+	if actions.stop {
+		output.stopPartitions = append(output.stopPartitions, id)
+	}
+
+	return output
+}
+
+func (s *state) computeSelfNodeActions(kvs []CASKeyValue, needUpdate bool) []CASKeyValue {
+	if s.leaseID == 0 {
+		return kvs
+	}
+
+	modRevision := Revision(0)
+
+	s.nodeMapMut.RLock()
+	node , ok := s.nodeMap[s.selfNodeID]
+	s.nodeMapMut.RUnlock()
+
+	if ok {
+		modRevision = node.ModRevision
+	}
+
+	if !ok || node.LastPartition != s.selfLastPartition || needUpdate {
+		kvs = append(kvs, CASKeyValue{
+			Type:        EtcdEventTypePut,
+			Key:         s.nodePrefix + fmt.Sprintf("%d", s.selfNodeID),
+			Value:       fmt.Sprintf("%d", s.selfLastPartition),
+			LeaseID:     s.leaseID,
+			ModRevision: modRevision,
+		})
+	}
+
+	return kvs
+}
+
 func (s *state) runLoop(
 	ctx context.Context,
 	leaseEvents <-chan LeaseID,
@@ -261,28 +327,13 @@ func (s *state) runLoop(
 	select {
 	case leaseID := <-leaseEvents:
 		oldLeaseID := s.leaseID
+		s.leaseID = leaseID
 
 		var kvs []CASKeyValue
 		if leaseID != oldLeaseID {
-			modRevision := Revision(0)
-
-			s.nodeMapMut.RLock()
-			for id, n := range s.nodeMap {
-				if id == s.selfNodeID {
-					modRevision = n.ModRevision
-				}
-			}
-			s.nodeMapMut.RUnlock()
-
-			kvs = append(kvs, CASKeyValue{
-				Key:         s.nodePrefix + fmt.Sprintf("%d", s.selfNodeID),
-				Value:       fmt.Sprintf("%d", s.selfLastPartition),
-				LeaseID:     leaseID,
-				ModRevision: modRevision,
-			})
+			kvs = s.computeSelfNodeActions(kvs, true)
 		}
 
-		s.leaseID = leaseID
 		return runLoopOutput{
 			kvs: kvs,
 		}
@@ -312,29 +363,7 @@ func (s *state) runLoop(
 			kvs = s.computePartitionKvs()
 		}
 
-		if s.leaseID != 0 {
-			found := false
-			var node Node
-
-			s.nodeMapMut.RLock()
-			for id, n := range s.nodeMap {
-				if id == s.selfNodeID {
-					found = true
-					node = n
-					break
-				}
-			}
-			s.nodeMapMut.RUnlock()
-
-			if !found || node.LastPartition != s.selfLastPartition {
-				kvs = append(kvs, CASKeyValue{
-					Key:         s.nodePrefix + fmt.Sprintf("%d", s.selfNodeID),
-					Value:       fmt.Sprintf("%d", s.selfLastPartition),
-					LeaseID:     s.leaseID,
-					ModRevision: 0,
-				})
-			}
-		}
+		kvs = s.computeSelfNodeActions(kvs, false)
 
 		return runLoopOutput{
 			kvs: kvs,

@@ -13,14 +13,6 @@ type Revision int64
 // LeaseID ...
 type LeaseID int64
 
-// CASKeyValue ...
-type CASKeyValue struct {
-	Key         string
-	Value       string
-	LeaseID     LeaseID
-	ModRevision Revision
-}
-
 // EtcdEventType ...
 type EtcdEventType int
 
@@ -30,6 +22,15 @@ const (
 	// EtcdEventTypeDelete ...
 	EtcdEventTypeDelete EtcdEventType = 2
 )
+
+// CASKeyValue ...
+type CASKeyValue struct {
+	Type        EtcdEventType
+	Key         string
+	Value       string
+	LeaseID     LeaseID
+	ModRevision Revision
+}
 
 // PartitionID ...
 type PartitionID uint32
