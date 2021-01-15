@@ -42,12 +42,12 @@ type PartitionEvent struct {
 	Type      EtcdEventType
 	Partition PartitionID
 	Owner     NodeID
+	Revision  Revision
 }
 
 // PartitionEvents ...
 type PartitionEvents struct {
-	Events   []PartitionEvent
-	Revision Revision
+	Events []PartitionEvent
 }
 
 // NodeEvent ...
@@ -55,7 +55,6 @@ type NodeEvent struct {
 	Type          EtcdEventType
 	NodeID        NodeID
 	LastPartition PartitionID
-	LeaseID       LeaseID
 	Revision      Revision
 }
 
@@ -152,6 +151,8 @@ func NewProcessor(conf Config) *Processor {
 		leaseChan:     conf.LeaseChan,
 		nodeChan:      conf.NodeChan,
 		partitionChan: conf.PartitionChan,
+
+		activeMap: make(map[PartitionID]activeRunner),
 	}
 }
 
@@ -172,26 +173,21 @@ func (p *Processor) Run(ctx context.Context) {
 			return
 		}
 
-		if len(output.kvs) > 0 {
-			err := p.client.CompareAndSet(ctx, output.kvs)
-			if err != nil {
-				p.logger.Error("client.CompareAndSet", zap.Error(err),
-					zap.Any("kvs", output.kvs),
-				)
-				after = time.After(p.timeoutDuration)
-				continue
-			}
-		}
-
 		var runnerEvents []RunnerEvent
 
 		for _, partition := range output.startPartitions {
-			ctx, cancel := context.WithCancel(ctx)
+			_, existed := p.activeMap[partition]
+			if existed {
+				continue
+			}
 
+			id := partition
+
+			ctx, cancel := context.WithCancel(ctx)
 			done := make(chan struct{}, 1)
 
 			go func() {
-				p.runner(ctx, partition)
+				p.runner(ctx, id)
 				done <- struct{}{}
 			}()
 
@@ -207,6 +203,11 @@ func (p *Processor) Run(ctx context.Context) {
 		}
 
 		for _, partition := range output.stopPartitions {
+			_, existed := p.activeMap[partition]
+			if !existed {
+				continue
+			}
+
 			p.activeMap[partition].cancel()
 			<-p.activeMap[partition].done
 
@@ -221,6 +222,17 @@ func (p *Processor) Run(ctx context.Context) {
 		if len(runnerEvents) > 0 {
 			runnerChan <- RunnerEvents{
 				Events: runnerEvents,
+			}
+		}
+
+		if len(output.kvs) > 0 {
+			err := p.client.CompareAndSet(ctx, output.kvs)
+			if err != nil {
+				p.logger.Error("client.CompareAndSet", zap.Error(err),
+					zap.Any("kvs", output.kvs),
+				)
+				after = time.After(p.timeoutDuration)
+				continue
 			}
 		}
 	}

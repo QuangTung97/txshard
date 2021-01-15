@@ -209,7 +209,7 @@ func (s *state) runLoopHandlePartitionEvent(events PartitionEvents) runLoopOutpu
 			newPartition = Partition{
 				Persisted:   true,
 				Owner:       e.Owner,
-				ModRevision: events.Revision,
+				ModRevision: e.Revision,
 			}
 		} else {
 			newPartition = Partition{
@@ -329,8 +329,7 @@ func (s *state) runLoop(
 			}
 		}
 		s.partitionsMut.Unlock()
-
-		return s.computePartitionsActions()
+		return runLoopOutput{}
 
 	case <-after:
 		output := s.computePartitionsActions()

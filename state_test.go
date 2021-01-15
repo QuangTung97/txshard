@@ -334,14 +334,15 @@ func TestRunLoop_PartitionEvent(t *testing.T) {
 						Type:      EtcdEventTypePut,
 						Partition: 0,
 						Owner:     1,
+						Revision:  200,
 					},
 					{
 						Type:      EtcdEventTypePut,
 						Partition: 2,
 						Owner:     2,
+						Revision:  200,
 					},
 				},
-				Revision: 200,
 			},
 			stateBefore: func(s *state) {
 				s.leaseID = 222
@@ -398,14 +399,15 @@ func TestRunLoop_PartitionEvent(t *testing.T) {
 						Type:      EtcdEventTypePut,
 						Partition: 0,
 						Owner:     1,
+						Revision:  200,
 					},
 					{
 						Type:      EtcdEventTypePut,
 						Partition: 2,
 						Owner:     2,
+						Revision:  200,
 					},
 				},
-				Revision: 200,
 			},
 			stateBefore: func(s *state) {
 				s.nodeMap = map[NodeID]Node{
@@ -454,19 +456,21 @@ func TestRunLoop_PartitionEvent(t *testing.T) {
 					{
 						Type:      EtcdEventTypeDelete,
 						Partition: 0,
+						Revision:  200,
 					},
 					{
 						Type:      EtcdEventTypePut,
 						Partition: 2,
 						Owner:     2,
+						Revision:  200,
 					},
 					{
 						Type:      EtcdEventTypePut,
 						Partition: 1,
 						Owner:     1,
+						Revision:  200,
 					},
 				},
-				Revision: 200,
 			},
 			stateBefore: func(s *state) {
 				s.leaseID = 212
@@ -996,11 +1000,6 @@ func TestRunLoop_Runner_Events(t *testing.T) {
 					ModRevision: 222,
 				}
 			},
-			output: runLoopOutput{
-				startPartitions: []PartitionID{
-					1, 2, 3,
-				},
-			},
 		},
 		{
 			name: "start-stop",
@@ -1064,11 +1063,6 @@ func TestRunLoop_Runner_Events(t *testing.T) {
 					Running:     false,
 					ModRevision: 222,
 				}
-			},
-			output: runLoopOutput{
-				startPartitions: []PartitionID{
-					1, 2, 3,
-				},
 			},
 		},
 	}

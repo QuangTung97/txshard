@@ -1,4 +1,7 @@
-.PHONY: lint test
+.PHONY: lint test build
+
+build:
+	go build -o main cmd/main.go
 
 lint:
 	go fmt ./...
