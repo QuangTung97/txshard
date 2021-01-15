@@ -209,8 +209,15 @@ func (p *Processor) Run(ctx context.Context) {
 			}
 
 			p.activeMap[partition].cancel()
-			<-p.activeMap[partition].done
+		}
 
+		for _, partition := range output.stopPartitions {
+			_, existed := p.activeMap[partition]
+			if !existed {
+				continue
+			}
+
+			<-p.activeMap[partition].done
 			delete(p.activeMap, partition)
 
 			runnerEvents = append(runnerEvents, RunnerEvent{
