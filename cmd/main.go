@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"go.etcd.io/etcd/clientv3"
 	"os"
 	"os/signal"
 	"strconv"
@@ -38,56 +39,36 @@ func main() {
 		panic(err)
 	}
 
-	manager := txshard.NewEtcdManager(logger)
-
 	ctx := context.Background()
-	managerCtx, managerCancel := context.WithCancel(ctx)
-	processorCtx, processorCancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(ctx)
 
-	processor := txshard.NewProcessor(txshard.Config{
-		PartitionCount:  4,
-		PartitionPrefix: "/partition/",
-		NodePrefix:      "/node/",
-
-		SelfNodeID:        nodeID,
-		SelfLastPartition: lastPartition,
-
-		Client: manager,
-		Runner: func(ctx context.Context, partitionID txshard.PartitionID) {
-			fmt.Println("STARTED:", partitionID)
-			<-ctx.Done()
-			time.Sleep(2 * time.Second)
-			fmt.Println("STOPPED:", partitionID)
-		},
-		Logger: logger,
-
-		LeaseChan:     manager.GetLeaseChan(),
-		NodeChan:      manager.WatchNodes(managerCtx, "/node/"),
-		PartitionChan: manager.WatchPartitions(managerCtx, "/partition/"),
-	})
-
-	var processorWg sync.WaitGroup
-	var managerWg sync.WaitGroup
-
-	processorWg.Add(1)
-	managerWg.Add(1)
+	var wg sync.WaitGroup
+	wg.Add(1)
 
 	go func() {
-		defer managerWg.Done()
-		manager.Run(managerCtx)
-		logger.Info("Etcd Manager stopped")
-	}()
+		defer wg.Done()
 
-	go func() {
-		defer processorWg.Done()
-		processor.Run(processorCtx)
+		txshard.RunSystem(ctx, txshard.SystemConfig{
+			AppName:        "sample",
+			PartitionCount: 4,
+			NodeID:         nodeID,
+			LastPartition:  lastPartition,
+			Runner: func(ctx context.Context, partitionID txshard.PartitionID) {
+				fmt.Println("STARTED:", partitionID)
+				<-ctx.Done()
+				time.Sleep(2 * time.Second)
+				fmt.Println("STOPPED:", partitionID)
+			},
+			Logger: logger,
+			EtcdConfig: clientv3.Config{
+				Endpoints: []string{
+					"localhost:2379",
+				},
+			},
+		})
 	}()
 
 	<-done
-
-	processorCancel()
-	processorWg.Wait()
-
-	managerCancel()
-	managerWg.Wait()
+	cancel()
+	wg.Wait()
 }

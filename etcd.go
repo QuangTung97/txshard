@@ -26,14 +26,11 @@ var _ EtcdClient = &EtcdManager{}
 var ErrTxnFailed = errors.New("etcd txn failed")
 
 // NewEtcdManager ...
-func NewEtcdManager(logger *zap.Logger) *EtcdManager {
-	client, err := clientv3.New(clientv3.Config{
-		Endpoints: []string{"localhost:2379"},
-	})
+func NewEtcdManager(logger *zap.Logger, conf clientv3.Config) *EtcdManager {
+	client, err := clientv3.New(conf)
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println("Created ETCD Client")
 
 	return &EtcdManager{
 		client:    client,

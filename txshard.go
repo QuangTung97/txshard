@@ -2,245 +2,73 @@ package txshard
 
 import (
 	"context"
+	"go.etcd.io/etcd/clientv3"
 	"go.uber.org/zap"
-	"time"
+	"sync"
 )
 
-// Revision ...
-type Revision int64
+// SystemConfig ...
+type SystemConfig struct {
+	AppName        string
+	PartitionCount PartitionID
+	NodeID         NodeID
+	LastPartition  PartitionID
+	Runner         Runner
 
-// LeaseID ...
-type LeaseID int64
-
-// EtcdEventType ...
-type EtcdEventType int
-
-const (
-	// EtcdEventTypePut ...
-	EtcdEventTypePut EtcdEventType = 1
-	// EtcdEventTypeDelete ...
-	EtcdEventTypeDelete EtcdEventType = 2
-)
-
-// CASKeyValue ...
-type CASKeyValue struct {
-	Type        EtcdEventType
-	Key         string
-	Value       string
-	LeaseID     LeaseID
-	ModRevision Revision
+	Logger     *zap.Logger
+	EtcdConfig clientv3.Config
 }
 
-// PartitionID ...
-type PartitionID uint32
+// RunSystem ...
+func RunSystem(rootCtx context.Context, conf SystemConfig) {
+	manager := NewEtcdManager(conf.Logger, conf.EtcdConfig)
 
-// NodeID ...
-type NodeID uint32
+	ctx := context.Background()
+	managerCtx, managerCancel := context.WithCancel(ctx)
+	processorCtx, processorCancel := context.WithCancel(ctx)
 
-// PartitionEvent ...
-type PartitionEvent struct {
-	Type      EtcdEventType
-	Partition PartitionID
-	Owner     NodeID
-	Revision  Revision
-}
+	partitionPrefix := "/" + conf.AppName + "/partition/"
+	nodePrefix := "/" + conf.AppName + "/node/"
 
-// PartitionEvents ...
-type PartitionEvents struct {
-	Events []PartitionEvent
-}
+	processor := NewProcessor(ProcessorConfig{
+		PartitionCount:  conf.PartitionCount,
+		PartitionPrefix: partitionPrefix,
+		NodePrefix:      nodePrefix,
 
-// NodeEvent ...
-type NodeEvent struct {
-	Type          EtcdEventType
-	NodeID        NodeID
-	LastPartition PartitionID
-	Revision      Revision
-}
+		SelfNodeID:        conf.NodeID,
+		SelfLastPartition: conf.LastPartition,
 
-// LeaderEvent ...
-type LeaderEvent struct {
-	Type   EtcdEventType
-	Leader NodeID
-}
+		Client: manager,
+		Runner: conf.Runner,
+		Logger: conf.Logger,
 
-// RunnerEventType ...
-type RunnerEventType int
+		LeaseChan:     manager.GetLeaseChan(),
+		NodeChan:      manager.WatchNodes(managerCtx, nodePrefix),
+		PartitionChan: manager.WatchPartitions(managerCtx, partitionPrefix),
+	})
 
-const (
-	// RunnerEventTypeStart ...
-	RunnerEventTypeStart RunnerEventType = 1
-	// RunnerEventTypeStop ...
-	RunnerEventTypeStop RunnerEventType = 2
-)
+	var processorWg sync.WaitGroup
+	var managerWg sync.WaitGroup
 
-// RunnerEvent ...
-type RunnerEvent struct {
-	Type      RunnerEventType
-	Partition PartitionID
-}
+	processorWg.Add(1)
+	managerWg.Add(1)
 
-// RunnerEvents ...
-type RunnerEvents struct {
-	Events []RunnerEvent
-}
+	go func() {
+		defer managerWg.Done()
+		manager.Run(managerCtx)
+		conf.Logger.Info("Etcd Manager stopped")
+	}()
 
-// EtcdClient ...
-type EtcdClient interface {
-	CompareAndSet(ctx context.Context, kvs []CASKeyValue) error
-}
+	go func() {
+		defer processorWg.Done()
+		processor.Run(processorCtx)
+	}()
 
-// Runner ...
-type Runner func(ctx context.Context, partitionID PartitionID)
+	<-rootCtx.Done()
 
-type activeRunner struct {
-	cancel context.CancelFunc
-	done   <-chan struct{}
-}
+	processorCancel()
+	processorWg.Wait()
 
-// Processor ...
-type Processor struct {
-	state  *state
-	client EtcdClient
-	runner Runner
-	logger *zap.Logger
-
-	timeoutDuration time.Duration
-
-	leaseChan     <-chan LeaseID
-	nodeChan      <-chan NodeEvent
-	partitionChan <-chan PartitionEvents
-
-	activeMap map[PartitionID]activeRunner
-}
-
-// Config ...
-type Config struct {
-	PartitionCount    PartitionID
-	PartitionPrefix   string
-	NodePrefix        string
-	SelfNodeID        NodeID
-	SelfLastPartition PartitionID
-
-	Client EtcdClient
-	Runner Runner
-	Logger *zap.Logger
-
-	LeaseChan     <-chan LeaseID
-	NodeChan      <-chan NodeEvent
-	PartitionChan <-chan PartitionEvents
-}
-
-// NewProcessor ...
-func NewProcessor(conf Config) *Processor {
-	st := newState(
-		conf.PartitionCount, conf.PartitionPrefix, conf.NodePrefix,
-		conf.SelfNodeID, conf.SelfLastPartition,
-	)
-
-	timeout := 60 * time.Second
-
-	return &Processor{
-		state:  st,
-		client: conf.Client,
-		runner: conf.Runner,
-		logger: conf.Logger,
-
-		timeoutDuration: timeout,
-
-		leaseChan:     conf.LeaseChan,
-		nodeChan:      conf.NodeChan,
-		partitionChan: conf.PartitionChan,
-
-		activeMap: make(map[PartitionID]activeRunner),
-	}
-}
-
-// Run ...
-func (p *Processor) Run(ctx context.Context) {
-	runnerChan := make(chan RunnerEvents, p.state.partitionCount)
-
-	var after <-chan time.Time
-	for {
-		output := p.state.runLoop(ctx, p.leaseChan, p.nodeChan, p.partitionChan, runnerChan, after)
-		if ctx.Err() != nil {
-			for _, runner := range p.activeMap {
-				runner.cancel()
-				<-runner.done
-			}
-			p.activeMap = make(map[PartitionID]activeRunner)
-
-			return
-		}
-
-		var runnerEvents []RunnerEvent
-
-		for _, partition := range output.startPartitions {
-			_, existed := p.activeMap[partition]
-			if existed {
-				continue
-			}
-
-			id := partition
-
-			ctx, cancel := context.WithCancel(ctx)
-			done := make(chan struct{}, 1)
-
-			go func() {
-				p.runner(ctx, id)
-				done <- struct{}{}
-			}()
-
-			p.activeMap[partition] = activeRunner{
-				cancel: cancel,
-				done:   done,
-			}
-
-			runnerEvents = append(runnerEvents, RunnerEvent{
-				Type:      RunnerEventTypeStart,
-				Partition: partition,
-			})
-		}
-
-		for _, partition := range output.stopPartitions {
-			_, existed := p.activeMap[partition]
-			if !existed {
-				continue
-			}
-
-			p.activeMap[partition].cancel()
-		}
-
-		for _, partition := range output.stopPartitions {
-			_, existed := p.activeMap[partition]
-			if !existed {
-				continue
-			}
-
-			<-p.activeMap[partition].done
-			delete(p.activeMap, partition)
-
-			runnerEvents = append(runnerEvents, RunnerEvent{
-				Type:      RunnerEventTypeStop,
-				Partition: partition,
-			})
-		}
-
-		if len(runnerEvents) > 0 {
-			runnerChan <- RunnerEvents{
-				Events: runnerEvents,
-			}
-		}
-
-		if len(output.kvs) > 0 {
-			err := p.client.CompareAndSet(ctx, output.kvs)
-			if err != nil {
-				p.logger.Error("client.CompareAndSet", zap.Error(err),
-					zap.Any("kvs", output.kvs),
-				)
-				after = time.After(p.timeoutDuration)
-				continue
-			}
-		}
-	}
+	managerCancel()
+	managerWg.Wait()
 }
