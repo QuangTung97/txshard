@@ -29,7 +29,8 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 				LastPartition: 3,
 				Revision:      100,
 			},
-			selfNodeID: 7,
+			selfNodeID:        7,
+			selfLastPartition: 3,
 			stateBefore: func(s *state) {
 				s.leaseID = 555
 			},
@@ -79,7 +80,8 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 				NodeID:        2,
 				Revision:      200,
 			},
-			selfNodeID: 1,
+			selfNodeID:        1,
+			selfLastPartition: 3,
 			stateBefore: func(s *state) {
 				s.leaseID = 512
 				s.nodeMap = map[NodeID]Node{
@@ -129,7 +131,8 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 				NodeID:        2,
 				Revision:      200,
 			},
-			selfNodeID: 1,
+			selfNodeID:        1,
+			selfLastPartition: 3,
 			stateBefore: func(s *state) {
 				s.leaseID = 666
 				s.nodeMap = map[NodeID]Node{
@@ -191,9 +194,9 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 				Type:          EtcdEventTypeDelete,
 				NodeID:        1,
 				LastPartition: 3,
-				Revision:      300,
 			},
-			selfNodeID: 1,
+			selfNodeID:        1,
+			selfLastPartition: 3,
 			stateBefore: func(s *state) {
 				s.leaseID = 777
 				s.nodeMap = map[NodeID]Node{
@@ -248,6 +251,12 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 						Type:        EtcdEventTypeDelete,
 						Key:         "/partition/3",
 						ModRevision: 140,
+					},
+					{
+						Type:    EtcdEventTypePut,
+						Key:     "/node/1",
+						Value:   "3",
+						LeaseID: 777,
 					},
 				},
 				stopPartitions: []PartitionID{0},

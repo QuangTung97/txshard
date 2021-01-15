@@ -314,7 +314,9 @@ func (s *state) runLoop(
 		}
 
 	case nodeEvent := <-nodeEvents:
-		return s.runLoopHandleNodeEvent(nodeEvent)
+		output := s.runLoopHandleNodeEvent(nodeEvent)
+		output.kvs = s.computeSelfNodeActions(output.kvs, false)
+		return output
 
 	case partitionEvent := <-partitionEventsChan:
 		return s.runLoopHandlePartitionEvent(partitionEvent)
