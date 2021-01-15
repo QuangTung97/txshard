@@ -309,7 +309,7 @@ func TestState_RunLoop_NodeEvent(t *testing.T) {
 			stateAfter := s.clone()
 			e.stateAfter(stateAfter)
 
-			output := s.runLoop(context.Background(), nil, ch, nil, nil)
+			output := s.runLoop(context.Background(), nil, ch, nil, nil, nil)
 
 			assert.Equal(t, stateAfter, s)
 			assert.Equal(t, e.output, output)
@@ -541,7 +541,7 @@ func TestRunLoop_PartitionEvent(t *testing.T) {
 			stateAfter := s.clone()
 			e.stateAfter(stateAfter)
 
-			output := s.runLoop(context.Background(), nil, nil, ch, nil)
+			output := s.runLoop(context.Background(), nil, nil, ch, nil, nil)
 
 			assert.Equal(t, stateAfter, s)
 			assert.Equal(t, e.output, output)
@@ -580,6 +580,19 @@ func TestRunLoop_Retry_After(t *testing.T) {
 					},
 				},
 			},
+		},
+		{
+			name: "no-self-node-without-lease",
+			stateBefore: func(s *state) {
+				s.nodeMap = map[NodeID]Node{
+					2: {
+						ID:            2,
+						LastPartition: 1,
+						ModRevision:   101,
+					},
+				}
+			},
+			output: runLoopOutput{},
 		},
 		{
 			name: "have-node-do-put-partitions",
@@ -689,7 +702,7 @@ func TestRunLoop_Retry_After(t *testing.T) {
 				e.stateAfter(stateAfter)
 			}
 
-			output := s.runLoop(context.Background(), nil, nil, nil, ch)
+			output := s.runLoop(context.Background(), nil, nil, nil, nil, ch)
 
 			assert.Equal(t, stateAfter, s)
 			assert.Equal(t, e.output, output)
@@ -704,7 +717,7 @@ func TestRunLoop_Context_Cancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(ctx)
 	cancel()
 
-	output := s.runLoop(ctx, nil, nil, nil, nil)
+	output := s.runLoop(ctx, nil, nil, nil, nil, nil)
 	assert.Equal(t, runLoopOutput{}, output)
 }
 
@@ -813,7 +826,7 @@ func TestRunLoop_Leases(t *testing.T) {
 			stateAfter := s.clone()
 			e.stateAfter(stateAfter)
 
-			output := s.runLoop(context.Background(), ch, nil, nil, nil)
+			output := s.runLoop(context.Background(), ch, nil, nil, nil, nil)
 
 			assert.Equal(t, stateAfter, s)
 			assert.Equal(t, e.output, output)
@@ -915,6 +928,174 @@ func TestPartitionActionsToOutput(t *testing.T) {
 
 			output := s.partitionActionsToOutput(e.preOutput, e.id, e.isLeader)
 			assert.Equal(t, e.expected, output)
+		})
+	}
+}
+
+func TestRunLoop_Runner_Events(t *testing.T) {
+	table := []struct {
+		name string
+
+		events []RunnerEvent
+
+		stateBefore func(s *state)
+		stateAfter  func(s *state)
+
+		output runLoopOutput
+	}{
+		{
+			name: "start-single",
+			events: []RunnerEvent{
+				{
+					Type:      RunnerEventTypeStart,
+					Partition: 0,
+				},
+			},
+			stateBefore: func(s *state) {
+				s.leaseID = 5566
+				s.nodeMap = map[NodeID]Node{
+					1: {
+						ID:            1,
+						LastPartition: 3,
+						ModRevision:   101,
+					},
+				}
+
+				s.partitions = []Partition{
+					{
+						Persisted:   true,
+						Owner:       1,
+						Running:     false,
+						ModRevision: 222,
+					},
+					{
+						Persisted:   true,
+						Owner:       1,
+						Running:     false,
+						ModRevision: 222,
+					},
+					{
+						Persisted:   true,
+						Owner:       1,
+						Running:     false,
+						ModRevision: 222,
+					},
+					{
+						Persisted:   true,
+						Owner:       1,
+						Running:     false,
+						ModRevision: 222,
+					},
+				}
+			},
+			stateAfter: func(s *state) {
+				s.partitions[0] = Partition{
+					Persisted:   true,
+					Owner:       1,
+					Running:     true,
+					ModRevision: 222,
+				}
+			},
+			output: runLoopOutput{
+				startPartitions: []PartitionID{
+					1, 2, 3,
+				},
+			},
+		},
+		{
+			name: "start-stop",
+			events: []RunnerEvent{
+				{
+					Type:      RunnerEventTypeStart,
+					Partition: 0,
+				},
+				{
+					Type:      RunnerEventTypeStop,
+					Partition: 2,
+				},
+			},
+			stateBefore: func(s *state) {
+				s.leaseID = 5566
+				s.nodeMap = map[NodeID]Node{
+					1: {
+						ID:            1,
+						LastPartition: 3,
+						ModRevision:   101,
+					},
+				}
+
+				s.partitions = []Partition{
+					{
+						Persisted:   true,
+						Owner:       1,
+						Running:     false,
+						ModRevision: 222,
+					},
+					{
+						Persisted:   true,
+						Owner:       1,
+						Running:     false,
+						ModRevision: 222,
+					},
+					{
+						Persisted:   true,
+						Owner:       1,
+						Running:     true,
+						ModRevision: 222,
+					},
+					{
+						Persisted:   true,
+						Owner:       1,
+						Running:     false,
+						ModRevision: 222,
+					},
+				}
+			},
+			stateAfter: func(s *state) {
+				s.partitions[0] = Partition{
+					Persisted:   true,
+					Owner:       1,
+					Running:     true,
+					ModRevision: 222,
+				}
+				s.partitions[2] = Partition{
+					Persisted:   true,
+					Owner:       1,
+					Running:     false,
+					ModRevision: 222,
+				}
+			},
+			output: runLoopOutput{
+				startPartitions: []PartitionID{
+					1, 2, 3,
+				},
+			},
+		},
+	}
+
+	for _, e := range table {
+		t.Run(e.name, func(t *testing.T) {
+			ch := make(chan RunnerEvents, 1)
+			ch <- RunnerEvents{
+				Events: e.events,
+			}
+
+			s := newState(4, "/partition/", "/node/", 1, 3)
+
+			if e.stateBefore != nil {
+				e.stateBefore(s)
+			}
+
+			stateAfter := s.clone()
+
+			if e.stateAfter != nil {
+				e.stateAfter(stateAfter)
+			}
+
+			output := s.runLoop(context.Background(), nil, nil, nil, ch, nil)
+
+			assert.Equal(t, stateAfter, s)
+			assert.Equal(t, e.output, output)
 		})
 	}
 }

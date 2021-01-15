@@ -3,7 +3,6 @@ package txshard
 import (
 	"context"
 	"go.uber.org/zap"
-	"sync"
 	"time"
 )
 
@@ -66,6 +65,27 @@ type LeaderEvent struct {
 	Leader NodeID
 }
 
+// RunnerEventType ...
+type RunnerEventType int
+
+const (
+	// RunnerEventTypeStart ...
+	RunnerEventTypeStart RunnerEventType = 1
+	// RunnerEventTypeStop ...
+	RunnerEventTypeStop RunnerEventType = 2
+)
+
+// RunnerEvent ...
+type RunnerEvent struct {
+	Type      RunnerEventType
+	Partition PartitionID
+}
+
+// RunnerEvents ...
+type RunnerEvents struct {
+	Events []RunnerEvent
+}
+
 // EtcdClient ...
 type EtcdClient interface {
 	CompareAndSet(ctx context.Context, kvs []CASKeyValue) error
@@ -93,7 +113,6 @@ type Processor struct {
 	partitionChan <-chan PartitionEvents
 
 	activeMap map[PartitionID]activeRunner
-	wg        sync.WaitGroup
 }
 
 // Config ...
@@ -138,11 +157,18 @@ func NewProcessor(conf Config) *Processor {
 
 // Run ...
 func (p *Processor) Run(ctx context.Context) {
+	runnerChan := make(chan RunnerEvents, p.state.partitionCount)
+
 	var after <-chan time.Time
 	for {
-		output := p.state.runLoop(ctx, p.leaseChan, p.nodeChan, p.partitionChan, after)
+		output := p.state.runLoop(ctx, p.leaseChan, p.nodeChan, p.partitionChan, runnerChan, after)
 		if ctx.Err() != nil {
-			p.wg.Wait()
+			for _, runner := range p.activeMap {
+				runner.cancel()
+				<-runner.done
+			}
+			p.activeMap = make(map[PartitionID]activeRunner)
+
 			return
 		}
 
@@ -157,14 +183,14 @@ func (p *Processor) Run(ctx context.Context) {
 			}
 		}
 
+		var runnerEvents []RunnerEvent
+
 		for _, partition := range output.startPartitions {
-			p.wg.Add(1)
 			ctx, cancel := context.WithCancel(ctx)
 
 			done := make(chan struct{}, 1)
 
 			go func() {
-				defer p.wg.Done()
 				p.runner(ctx, partition)
 				done <- struct{}{}
 			}()
@@ -173,6 +199,11 @@ func (p *Processor) Run(ctx context.Context) {
 				cancel: cancel,
 				done:   done,
 			}
+
+			runnerEvents = append(runnerEvents, RunnerEvent{
+				Type:      RunnerEventTypeStart,
+				Partition: partition,
+			})
 		}
 
 		for _, partition := range output.stopPartitions {
@@ -180,6 +211,17 @@ func (p *Processor) Run(ctx context.Context) {
 			<-p.activeMap[partition].done
 
 			delete(p.activeMap, partition)
+
+			runnerEvents = append(runnerEvents, RunnerEvent{
+				Type:      RunnerEventTypeStop,
+				Partition: partition,
+			})
+		}
+
+		if len(runnerEvents) > 0 {
+			runnerChan <- RunnerEvents{
+				Events: runnerEvents,
+			}
 		}
 	}
 }

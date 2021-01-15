@@ -52,8 +52,23 @@ func newState(
 		selfNodeID:        selfNodeID,
 		selfLastPartition: selfLastPartition,
 
+		nodeMap:    make(map[NodeID]Node),
 		partitions: make([]Partition, partitionCount),
 	}
+}
+
+func cloneNodeMap(nodeMap map[NodeID]Node) map[NodeID]Node {
+	result := make(map[NodeID]Node)
+	for k, v := range nodeMap {
+		result[k] = v
+	}
+	return result
+}
+
+func clonePartitions(partitions []Partition) []Partition {
+	result := make([]Partition, len(partitions))
+	copy(result, partitions)
+	return result
 }
 
 func (s *state) clone() *state {
@@ -67,8 +82,8 @@ func (s *state) clone() *state {
 
 		leaseID: s.leaseID,
 
-		nodeMap:    s.nodeMap,
-		partitions: s.partitions,
+		nodeMap:    cloneNodeMap(s.nodeMap),
+		partitions: clonePartitions(s.partitions),
 	}
 }
 
@@ -116,6 +131,14 @@ func computeNodeIDFromPartitionID(nodes []Node, partition PartitionID) NodeID {
 }
 
 func (s *state) computePartitionsActions() runLoopOutput {
+	s.nodeMapMut.RLock()
+	nodeMapLen := len(s.nodeMap)
+	s.nodeMapMut.RUnlock()
+
+	if nodeMapLen == 0 {
+		return runLoopOutput{}
+	}
+
 	s.nodeMapMut.RLock()
 	nodes := make([]Node, 0, len(s.nodeMap))
 	for _, n := range s.nodeMap {
@@ -177,15 +200,7 @@ func (s *state) runLoopHandleNodeEvent(nodeEvent NodeEvent) runLoopOutput {
 		s.nodeMapMut.Unlock()
 	}
 
-	s.nodeMapMut.RLock()
-	nodeMapLen := len(s.nodeMap)
-	s.nodeMapMut.RUnlock()
-
-	if nodeMapLen > 0 {
-		return s.computePartitionsActions()
-	}
-
-	return runLoopOutput{}
+	return s.computePartitionsActions()
 }
 
 func (s *state) runLoopHandlePartitionEvent(events PartitionEvents) runLoopOutput {
@@ -283,6 +298,7 @@ func (s *state) runLoop(
 	leaseEvents <-chan LeaseID,
 	nodeEvents <-chan NodeEvent,
 	partitionEventsChan <-chan PartitionEvents,
+	runnerChan <-chan RunnerEvents,
 	after <-chan time.Time,
 ) runLoopOutput {
 	select {
@@ -304,6 +320,19 @@ func (s *state) runLoop(
 
 	case partitionEvent := <-partitionEventsChan:
 		return s.runLoopHandlePartitionEvent(partitionEvent)
+
+	case runnerEvents := <-runnerChan:
+		s.partitionsMut.Lock()
+		for _, event := range runnerEvents.Events {
+			if event.Type == RunnerEventTypeStart {
+				s.partitions[event.Partition].Running = true
+			} else {
+				s.partitions[event.Partition].Running = false
+			}
+		}
+		s.partitionsMut.Unlock()
+
+		return s.computePartitionsActions()
 
 	case <-after:
 		s.nodeMapMut.RLock()
