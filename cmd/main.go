@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"go.etcd.io/etcd/clientv3"
+	"go.uber.org/zap/zapcore"
 	"os"
 	"os/signal"
 	"strconv"
@@ -34,7 +34,9 @@ func main() {
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, os.Kill)
 
-	logger, err := zap.NewProduction()
+	zapConf := zap.NewProductionConfig()
+	zapConf.Level = zap.NewAtomicLevelAt(zapcore.DebugLevel)
+	logger, err := zapConf.Build()
 	if err != nil {
 		panic(err)
 	}
@@ -54,10 +56,10 @@ func main() {
 			NodeID:         nodeID,
 			LastPartition:  lastPartition,
 			Runner: func(ctx context.Context, partitionID txshard.PartitionID) {
-				fmt.Println("STARTED:", partitionID)
+				logger.Info("Partition Started", zap.Any("partition.id", partitionID))
 				<-ctx.Done()
 				time.Sleep(2 * time.Second)
-				fmt.Println("STOPPED:", partitionID)
+				logger.Info("Partition Stopped", zap.Any("partition.id", partitionID))
 			},
 			Logger: logger,
 			EtcdConfig: clientv3.Config{

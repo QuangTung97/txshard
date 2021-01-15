@@ -3,7 +3,6 @@ package txshard
 import (
 	"context"
 	"errors"
-	"fmt"
 	"go.etcd.io/etcd/clientv3"
 	"go.etcd.io/etcd/clientv3/concurrency"
 	"go.etcd.io/etcd/mvcc/mvccpb"
@@ -31,6 +30,8 @@ func NewEtcdManager(logger *zap.Logger, conf clientv3.Config) *EtcdManager {
 	if err != nil {
 		panic(err)
 	}
+
+	logger.Debug("EtcdManager created")
 
 	return &EtcdManager{
 		client:    client,
@@ -68,7 +69,7 @@ func (m *EtcdManager) Run(ctx context.Context) {
 
 // CompareAndSet ...
 func (m *EtcdManager) CompareAndSet(ctx context.Context, kvs []CASKeyValue) error {
-	fmt.Println("CAS:", kvs)
+	m.logger.Debug("CompareAndSet", zap.Any("etcd.kvs", kvs))
 
 	var compares []clientv3.Cmp
 	var ops []clientv3.Op
@@ -144,7 +145,7 @@ func (m *EtcdManager) WatchNodes(ctx context.Context, prefix string) <-chan Node
 			LastPartition: PartitionID(getNumber(string(kv.Value))),
 			Revision:      Revision(kv.ModRevision),
 		}
-		fmt.Println("Node Event:", event)
+		m.logger.Debug("WatchNodes", zap.Any("node.event", event))
 		result <- event
 	}
 
@@ -166,7 +167,7 @@ func (m *EtcdManager) WatchNodes(ctx context.Context, prefix string) <-chan Node
 					LastPartition: lastPartition,
 					Revision:      Revision(revision),
 				}
-				fmt.Println("Node Event:", event)
+				m.logger.Debug("WatchNodes", zap.Any("node.event", event))
 				result <- event
 			}
 		}
@@ -196,10 +197,11 @@ func (m *EtcdManager) WatchPartitions(ctx context.Context, prefix string) <-chan
 	}
 
 	result := make(chan PartitionEvents, 1)
-	fmt.Println("PartitionEvents:", events)
-
-	result <- PartitionEvents{
-		Events: events,
+	if len(events) > 0 {
+		m.logger.Debug("WatchPartitions", zap.Any("partition.events", events))
+		result <- PartitionEvents{
+			Events: events,
+		}
 	}
 
 	ch := m.client.Watch(ctx, prefix, clientv3.WithPrefix(), clientv3.WithRev(rev+1))
@@ -221,7 +223,7 @@ func (m *EtcdManager) WatchPartitions(ctx context.Context, prefix string) <-chan
 					Revision:  Revision(e.Kv.ModRevision),
 				})
 			}
-			fmt.Println("PartitionEvents:", events)
+			m.logger.Debug("WatchPartitions", zap.Any("partition.events", events))
 			result <- PartitionEvents{
 				Events: events,
 			}
