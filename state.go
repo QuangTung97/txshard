@@ -186,19 +186,17 @@ func addNode(nodeMap map[NodeID]Node, n Node) map[NodeID]Node {
 }
 
 func (s *state) runLoopHandleNodeEvent(nodeEvent NodeEvent) runLoopOutput {
+	s.nodeMapMut.Lock()
 	if nodeEvent.Type == EtcdEventTypePut {
-		s.nodeMapMut.Lock()
 		s.nodeMap = addNode(s.nodeMap, Node{
 			ID:            nodeEvent.NodeID,
 			LastPartition: nodeEvent.LastPartition,
 			ModRevision:   nodeEvent.Revision,
 		})
-		s.nodeMapMut.Unlock()
 	} else if nodeEvent.Type == EtcdEventTypeDelete {
-		s.nodeMapMut.Lock()
 		s.nodeMap = deleteNodeByID(s.nodeMap, nodeEvent.NodeID)
-		s.nodeMapMut.Unlock()
 	}
+	s.nodeMapMut.Unlock()
 
 	return s.computePartitionsActions()
 }
@@ -335,14 +333,7 @@ func (s *state) runLoop(
 		return s.computePartitionsActions()
 
 	case <-after:
-		s.nodeMapMut.RLock()
-		nodeMapLen := len(s.nodeMap)
-		s.nodeMapMut.RUnlock()
-
-		output := runLoopOutput{}
-		if nodeMapLen > 0 {
-			output = s.computePartitionsActions()
-		}
+		output := s.computePartitionsActions()
 		output.kvs = s.computeSelfNodeActions(output.kvs, false)
 		return output
 
